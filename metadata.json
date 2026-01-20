@@ -1,0 +1,7 @@
+{
+  "name": "Copy of DocuMatch AI - Reconciliation System",
+  "description": "An intelligent document reconciliation system powered by Gemini AI to process and match Purchase Orders, Invoices, Goods Receipts, and Delivery Notes for financial accuracy.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
