@@ -2,11 +2,8 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { ExtractedData, DocumentType } from "../types";
 
-// Always use the process.env.API_KEY directly for initialization.
-// The key is provided by the environment, so we do not prompt for it or provide a default empty string.
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-// Helper to encode file to base64
 export const fileToBase64 = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -20,10 +17,6 @@ export const fileToBase64 = (file: File): Promise<string> => {
   });
 };
 
-/**
- * Processes a business document image/PDF to extract structured data.
- * Uses gemini-3-flash-preview as it is highly efficient for text extraction and classification tasks.
- */
 export async function processDocument(base64Data: string, mimeType: string): Promise<ExtractedData> {
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
@@ -36,9 +29,31 @@ export async function processDocument(base64Data: string, mimeType: string): Pro
           }
         },
         {
-          text: `Extract structured data from this business document. 
-          Classify it into one of these types: Pesanan Pembelian (PO), Faktur Pembelian, Faktur Penjualan, Penerimaan Barang, Surat Jalan, or Faktur Pajak.
-          Provide the output as JSON.`
+          text: `Extract structured data from this business document with high precision for finance audit.
+          
+          STRICT CLASSIFICATION RULES:
+          1. Pesanan Pembelian (PO): 
+             - MUST have a document number starting with "PO".
+             - Often contains "Nomor Faktur Pajak" at the top or in the header section.
+             - This is the master order document.
+          2. Faktur Pembelian: 
+             - MUST start with prefix "PI".
+             - Usually references a PO number.
+          3. Faktur Penjualan: 
+             - Starts with "INV", "SI", or "IV".
+          4. Surat Jalan (Delivery Note): 
+             - Can be from a SELLER directly OR from an EXPEDITION/LOGISTICS company.
+             - Look for terms: "Surat Jalan", "Delivery Note", "Logistik", "Ekspedisi", "Carrier", "Transport".
+          5. Faktur Pajak: 
+             - Standalone tax document with a 16-digit code.
+
+          EXTRACTION GUIDELINES:
+          - Extract "Nomor Faktur Pajak" if it appears in any field (very common in PO field #1).
+          - Identify "Reference Number" (e.g., if a PI references a PO number).
+          - Capture line items accurately (Description, Qty, Price, Discount).
+          - Capture "Tempo" or "Due Duration" (e.g., "30 Hari").
+          
+          Output the result as a strict JSON object.`
         }
       ]
     },
@@ -47,10 +62,15 @@ export async function processDocument(base64Data: string, mimeType: string): Pro
       responseSchema: {
         type: Type.OBJECT,
         properties: {
-          documentType: { type: Type.STRING, description: "One of the listed document types" },
+          documentType: { type: Type.STRING },
           documentNumber: { type: Type.STRING },
-          referenceNumber: { type: Type.STRING, description: "Reference to PO, SO, or Delivery Note if found" },
+          referenceNumber: { type: Type.STRING },
           date: { type: Type.STRING },
+          purchaseDate: { type: Type.STRING },
+          dueDate: { type: Type.STRING },
+          dueDuration: { type: Type.STRING },
+          receiptDate: { type: Type.STRING },
+          taxInvoiceNumber: { type: Type.STRING },
           vendorName: { type: Type.STRING },
           customerName: { type: Type.STRING },
           totalAmount: { type: Type.NUMBER },
@@ -63,6 +83,8 @@ export async function processDocument(base64Data: string, mimeType: string): Pro
                 description: { type: Type.STRING },
                 quantity: { type: Type.NUMBER },
                 unitPrice: { type: Type.NUMBER },
+                discountPercentage: { type: Type.NUMBER },
+                discountAmount: { type: Type.NUMBER },
                 totalPrice: { type: Type.NUMBER }
               },
               required: ["description", "quantity", "unitPrice", "totalPrice"]
@@ -74,7 +96,6 @@ export async function processDocument(base64Data: string, mimeType: string): Pro
     }
   });
 
-  // Correctly access text from the response object as a property
   const text = response.text;
   if (!text) throw new Error("No response from AI");
   
@@ -82,46 +103,95 @@ export async function processDocument(base64Data: string, mimeType: string): Pro
 }
 
 export async function reconcileDocuments(documents: ExtractedData[]): Promise<any> {
-  // Logic to group documents and find discrepancies
-  // This could also be an AI call, but simple logic often works better for exact matches
   const groups: Record<string, ExtractedData[]> = {};
   
+  // Step 1: Intelligent Grouping
+  // Priority: PO Number > PI Number > Reference Number
   documents.forEach(doc => {
-    const key = doc.referenceNumber || doc.documentNumber;
+    let key = '';
+    
+    // If it's a PO, it's the master of the group
+    if (doc.documentNumber.toUpperCase().startsWith('PO')) {
+      key = doc.documentNumber.toUpperCase();
+    } 
+    // If it's an invoice referencing a PO
+    else if (doc.referenceNumber?.toUpperCase().startsWith('PO')) {
+      key = doc.referenceNumber.toUpperCase();
+    }
+    // If it's a PI, it might be a sub-key if PO isn't found yet
+    else if (doc.documentNumber.toUpperCase().startsWith('PI')) {
+      key = doc.documentNumber.toUpperCase();
+    }
+    // Fallback to whatever unique ID exists
+    else {
+      key = doc.referenceNumber || doc.documentNumber;
+    }
+
     if (!groups[key]) groups[key] = [];
     groups[key].push(doc);
   });
 
-  const reconciliation = Object.entries(groups).map(([key, docs]) => {
+  return Object.entries(groups).map(([key, docs]) => {
     const discrepancies: string[] = [];
+    const analysisFindings: string[] = [];
     
-    // Check if we have both a PO and an Invoice to compare
-    const po = docs.find(d => d.documentType.includes('Pesanan Pembelian'));
-    const invoice = docs.find(d => d.documentType.includes('Faktur Pembelian'));
-    const gr = docs.find(d => d.documentType.includes('Penerimaan Barang') || d.documentType.includes('Surat Jalan'));
+    const masterPO = docs.find(d => d.documentNumber.toUpperCase().startsWith('PO'));
+    const invoices = docs.filter(d => d.documentType.includes('Faktur'));
+    const deliveryNotes = docs.filter(d => d.documentType.includes('Surat Jalan'));
+    
+    // Tax number inheritance: if any document has a tax number, consider it verified for the group
+    const groupTaxNumber = docs.find(d => d.taxInvoiceNumber)?.taxInvoiceNumber;
 
-    if (po && invoice) {
-      if (Math.abs(po.totalAmount - invoice.totalAmount) > 1) {
-        discrepancies.push(`Total amount mismatch: PO (${po.totalAmount}) vs Invoice (${invoice.totalAmount})`);
-      }
+    // 1. PO Validation
+    if (!masterPO) {
+      discrepancies.push("DOKUMEN KRITIS HILANG: Berkas Pesanan Pembelian (PO) dengan nomor referensi terkait tidak ditemukan.");
+    } else {
+      analysisFindings.push(`MASTER PO TERDETEKSI: #${masterPO.documentNumber} - Mencakup ${invoices.length} Faktur terkait.`);
     }
 
-    if (po && gr) {
-       // Compare total quantities
-       const poQty = po.items.reduce((sum, i) => sum + i.quantity, 0);
-       const grQty = gr.items.reduce((sum, i) => sum + i.quantity, 0);
-       if (poQty !== grQty) {
-          discrepancies.push(`Quantity mismatch: PO requested ${poQty} items, GR received ${grQty} items`);
-       }
+    // 2. Invoice & Delivery Validation
+    if (invoices.length === 0) {
+      discrepancies.push("DOKUMEN HILANG: Belum ada Faktur (PI/INV) yang diunggah untuk transaksi ini.");
+    }
+
+    if (deliveryNotes.length === 0) {
+      discrepancies.push("DOKUMEN HILANG: Berkas Surat Jalan (Logistik/Seller) tidak ditemukan.");
+    }
+
+    // 3. Tax Check
+    if (groupTaxNumber) {
+      const hasTaxFile = docs.some(d => d.documentType === 'Faktur Pajak');
+      if (hasTaxFile) {
+        analysisFindings.push(`PAJAK TERVERIFIKASI: Nomor Faktur Pajak ${groupTaxNumber} sesuai dengan berkas fisik.`);
+      } else {
+        analysisFindings.push(`PAJAK TERDETEKSI: Nomor Pajak ${groupTaxNumber} ditemukan dalam referensi (biasanya di PO), namun file fisik Faktur Pajak belum diunggah.`);
+      }
+    } else {
+      discrepancies.push("INFORMASI HILANG: Nomor Faktur Pajak tidak ditemukan di PO maupun dokumen lainnya.");
+    }
+
+    // 4. Logistics Origin Analysis
+    deliveryNotes.forEach(note => {
+      const isExpedition = /ekspedisi|logistic|kurir|transport|jne|jnt|pos|cargo/i.test(note.vendorName) || /ekspedisi|logistic|kurir/i.test(note.documentNumber);
+      analysisFindings.push(`LOGISTIK: Surat Jalan #${note.documentNumber} berasal dari ${isExpedition ? 'Pihak Ekspedisi/Logistic' : 'Pihak Penjual Langsung'}.`);
+    });
+
+    // 5. Aggregate Totals (One PO to Many Invoices)
+    if (masterPO && invoices.length > 0) {
+      const totalInvoiceAmount = invoices.reduce((sum, inv) => sum + inv.totalAmount, 0);
+      if (Math.abs(totalInvoiceAmount - masterPO.totalAmount) > 100) {
+        discrepancies.push(`SELISIH NILAI: Total Akumulasi Faktur (${totalInvoiceAmount.toLocaleString('id-ID')}) berbeda dengan nilai Master PO (${masterPO.totalAmount.toLocaleString('id-ID')}).`);
+      }
     }
 
     return {
       groupKey: key,
       documents: docs,
       isMatch: discrepancies.length === 0,
-      discrepancies
+      discrepancies,
+      analysisFindings,
+      checkedAt: new Date().toLocaleString('id-ID'),
+      taxNumberRef: groupTaxNumber
     };
   });
-
-  return reconciliation;
 }
