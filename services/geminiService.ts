@@ -70,19 +70,18 @@ export async function processDocument(base64Data: string, mimeType: string): Pro
         },
         {
           text: `Tugas Anda adalah Auditor Keuangan CV Global Solusi. 
-          File ini mungkin berisi banyak halaman. Identifikasi SETIAP nota/faktur secara individu.
+          Identifikasi SETIAP nota/faktur secara individu.
           
-          ATURAN EKSTRAKSI KETAT:
-          1. Pisahkan setiap nota faktur pembelian atau faktur pajak menjadi entitas terpisah. 
-          2. Satu objek dalam array output harus mewakili HANYA satu nomor faktur unik.
-          3. Ekstrak data berikut dengan ketelitian tinggi:
+          ATURAN PERHITUNGAN PPN (TAX) KETAT:
+          1. Hitung PPN (taxAmount) untuk SETIAP BARIS ITEM (Line Item). 
+          2. Gunakan tarif PPN 12% dari (Harga Satuan * Qty - Diskon Item).
+          3. Total PPN Dokumen (taxAmount di tingkat root) HARUS merupakan hasil penjumlahan dari seluruh taxAmount per item.
+          4. Pastikan data berikut diekstrak:
              - Nama Barang, Qty, Harga Satuan.
-             - Diskon per item (discountAmount).
-             - PPN per item (taxAmount) - Gunakan tarif PPN 12% jika tidak tertera jelas namun dokumen adalah Faktur Pajak/Invoice resmi.
-             - Nomor Seri Faktur Pajak (NSFP) 16 digit jika ada.
-             - Nomor Faktur/Invoice/PO.
-          4. Hitung total diskon (discountTotal) dan total PPN (taxAmount) untuk seluruh dokumen.
-          5. Pastikan kalkulasi matematis benar: (Qty * Harga) - Diskon + PPN = Total.
+             - Diskon per item (jika ada).
+             - PPN per item (WAJIB ADA).
+             - Nomor Seri Faktur Pajak (NSFP) jika ada.
+          5. Validasi Matematika: Total Akhir = Sum(Semua Total Price Item). Dimana Total Price Item = (Qty * Harga) - Diskon + PPN.
           
           Format output: JSON Array.`
         }
@@ -101,10 +100,10 @@ export async function processDocument(base64Data: string, mimeType: string): Pro
             taxInvoiceNumber: { type: Type.STRING },
             vendorName: { type: Type.STRING },
             customerName: { type: Type.STRING },
-            subtotalAmount: { type: Type.NUMBER },
-            taxAmount: { type: Type.NUMBER },
-            discountTotal: { type: Type.NUMBER },
-            totalAmount: { type: Type.NUMBER },
+            subtotalAmount: { type: Type.NUMBER, description: "Total bruto sebelum diskon dan pajak" },
+            taxAmount: { type: Type.NUMBER, description: "Total akumulasi PPN dari semua item" },
+            discountTotal: { type: Type.NUMBER, description: "Total akumulasi diskon dari semua item" },
+            totalAmount: { type: Type.NUMBER, description: "Grand total bersih yang harus dibayar" },
             items: {
               type: Type.ARRAY,
               items: {
@@ -114,14 +113,14 @@ export async function processDocument(base64Data: string, mimeType: string): Pro
                   quantity: { type: Type.NUMBER },
                   unitPrice: { type: Type.NUMBER },
                   discountAmount: { type: Type.NUMBER },
-                  taxAmount: { type: Type.NUMBER },
-                  totalPrice: { type: Type.NUMBER }
+                  taxAmount: { type: Type.NUMBER, description: "PPN 12% untuk item ini" },
+                  totalPrice: { type: Type.NUMBER, description: "Net price untuk item ini (Qty*Price - Disc + Tax)" }
                 },
-                required: ["description", "quantity", "unitPrice", "totalPrice"]
+                required: ["description", "quantity", "unitPrice", "taxAmount", "totalPrice"]
               }
             }
           },
-          required: ["documentType", "documentNumber", "date", "items", "totalAmount"]
+          required: ["documentType", "documentNumber", "date", "items", "totalAmount", "taxAmount"]
         }
       }
     }
@@ -149,7 +148,9 @@ export async function reconcileDocuments(documents: ExtractedData[]): Promise<Re
     const hasTax = docs.some(d => (d.documentType || "").toLowerCase().includes('pajak'));
 
     if (hasInvoice && !hasTax) discrepancies.push("Peringatan: Dokumen Faktur Pajak fisik tidak ditemukan untuk faktur ini.");
-    if (docs.length > 1) analysisFindings.push("Validasi: Data komersial dan perpajakan sinkron.");
+    
+    const totalTaxFromItems = docs.reduce((acc, doc) => acc + (doc.taxAmount || 0), 0);
+    analysisFindings.push(`Total PPN terakumulasi dari rincian barang: Rp ${totalTaxFromItems.toLocaleString('id-ID')}`);
 
     return {
       groupKey: key,
