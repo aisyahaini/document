@@ -8,31 +8,47 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
     <style>
         body { font-family: 'Inter', sans-serif; }
+        
         @media print {
-            aside, header, button, .no-print, .backdrop-blur-sm {
+            aside, header, button, .no-print, .action-buttons {
                 display: none !important;
             }
             body {
                 background: white !important;
                 padding: 0 !important;
+                margin: 0 !important;
             }
-            #root {
-                display: block !important;
-            }
-            .modal-container {
-                position: static !important;
-                box-shadow: none !important;
-                width: 100% !important;
-                max-width: none !important;
+            main {
                 padding: 0 !important;
                 margin: 0 !important;
             }
-            .modal-content {
-                max-height: none !important;
-                overflow: visible !important;
+            .max-w-6xl {
+                max-width: 100% !important;
+                width: 100% !important;
+                padding: 0 !important;
+            }
+            /* Mencegah elemen terpotong antar halaman */
+            .break-inside-avoid {
+                page-break-inside: avoid;
+                break-inside: avoid;
+            }
+            tr {
+                page-break-inside: avoid;
+                break-inside: avoid;
+            }
+            table {
+                page-break-inside: auto;
+            }
+            thead {
+                display: table-header-group;
+            }
+            /* Memaksa background muncul di PDF */
+            * {
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
             }
         }
     </style>

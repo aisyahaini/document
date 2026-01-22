@@ -14,6 +14,7 @@ export interface LineItem {
   unitPrice: number;
   discountPercentage?: number;
   discountAmount?: number;
+  taxAmount?: number; // PPN per line item
   totalPrice: number;
 }
 
@@ -21,17 +22,15 @@ export interface ExtractedData {
   documentType: DocumentType;
   documentNumber: string;
   referenceNumber?: string;
-  date: string; // Issue date
-  purchaseDate?: string;
-  dueDate?: string;
-  dueDuration?: string; // New: explicit duration/tempo from file (e.g. "30 Hari")
-  receiptDate?: string;
+  date: string;
   taxInvoiceNumber?: string;
   vendorName: string;
   customerName: string;
   items: LineItem[];
+  subtotalAmount: number;
+  taxAmount: number;
+  discountTotal: number;
   totalAmount: number;
-  taxAmount?: number;
 }
 
 export interface ProcessingFile {
@@ -39,7 +38,7 @@ export interface ProcessingFile {
   fileName: string;
   previewUrl?: string;
   status: 'pending' | 'processing' | 'completed' | 'error';
-  extractedData?: ExtractedData;
+  extractedDocs?: ExtractedData[]; // Support for multiple documents per file
   errorMessage?: string;
   processedAt?: string;
 }
@@ -49,6 +48,7 @@ export interface ReconciliationResult {
   documents: ExtractedData[];
   isMatch: boolean;
   discrepancies: string[];
-  analysisFindings: string[]; // Detailed findings about price/discount matches
+  analysisFindings: string[];
   checkedAt: string;
+  taxNumberRef?: string;
 }

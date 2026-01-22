@@ -1,23 +1,63 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { ExtractedData, DocumentType } from "../types";
+import { ExtractedData, DocumentType, ReconciliationResult } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const MAX_IMAGE_DIMENSION = 2048;
 
 export const fileToBase64 = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);
     reader.onload = () => {
-      const base64String = reader.result?.toString().split(',')[1];
-      if (base64String) resolve(base64String);
-      else reject("Failed to convert file to base64");
+      const result = reader.result?.toString();
+      if (result) {
+        const base64String = result.split(',')[1];
+        resolve(base64String);
+      } else {
+        reject("Gagal mengonversi file ke base64");
+      }
     };
     reader.onerror = error => reject(error);
   });
 };
 
-export async function processDocument(base64Data: string, mimeType: string): Promise<ExtractedData> {
+export async function optimizeImage(file: File): Promise<string> {
+  if (!file.type.startsWith('image/')) {
+    return fileToBase64(file);
+  }
+
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.src = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(img.src);
+      let width = img.width;
+      let height = img.height;
+
+      if (width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION) {
+        if (width > height) {
+          height = (height / width) * MAX_IMAGE_DIMENSION;
+          width = MAX_IMAGE_DIMENSION;
+        } else {
+          width = (width / height) * MAX_IMAGE_DIMENSION;
+          height = MAX_IMAGE_DIMENSION;
+        }
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx?.drawImage(img, 0, 0, width, height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+      resolve(dataUrl.split(',')[1]);
+    };
+    img.onerror = () => reject("Gagal mengoptimalkan gambar");
+  });
+}
+
+export async function processDocument(base64Data: string, mimeType: string): Promise<ExtractedData[]> {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
     contents: {
@@ -29,160 +69,87 @@ export async function processDocument(base64Data: string, mimeType: string): Pro
           }
         },
         {
-          text: `Extract structured data from this business document with high precision for finance audit.
+          text: `Tugas Anda adalah Auditor Keuangan CV Global Solusi. 
+          File ini mungkin berisi banyak halaman. Identifikasi SETIAP nota/faktur secara individu.
           
-          STRICT CLASSIFICATION RULES:
-          1. Pesanan Pembelian (PO): 
-             - MUST have a document number starting with "PO".
-             - Often contains "Nomor Faktur Pajak" at the top or in the header section.
-             - This is the master order document.
-          2. Faktur Pembelian: 
-             - MUST start with prefix "PI".
-             - Usually references a PO number.
-          3. Faktur Penjualan: 
-             - Starts with "INV", "SI", or "IV".
-          4. Surat Jalan (Delivery Note): 
-             - Can be from a SELLER directly OR from an EXPEDITION/LOGISTICS company.
-             - Look for terms: "Surat Jalan", "Delivery Note", "Logistik", "Ekspedisi", "Carrier", "Transport".
-          5. Faktur Pajak: 
-             - Standalone tax document with a 16-digit code.
-
-          EXTRACTION GUIDELINES:
-          - Extract "Nomor Faktur Pajak" if it appears in any field (very common in PO field #1).
-          - Identify "Reference Number" (e.g., if a PI references a PO number).
-          - Capture line items accurately (Description, Qty, Price, Discount).
-          - Capture "Tempo" or "Due Duration" (e.g., "30 Hari").
+          ATURAN EKSTRAKSI KETAT:
+          1. Pisahkan setiap nota faktur pembelian atau faktur pajak menjadi entitas terpisah. 
+          2. Satu objek dalam array output harus mewakili HANYA satu nomor faktur unik.
+          3. Ekstrak data berikut dengan ketelitian tinggi:
+             - Nama Barang, Qty, Harga Satuan.
+             - Diskon per item (discountAmount).
+             - PPN per item (taxAmount) - Gunakan tarif PPN 12% jika tidak tertera jelas namun dokumen adalah Faktur Pajak/Invoice resmi.
+             - Nomor Seri Faktur Pajak (NSFP) 16 digit jika ada.
+             - Nomor Faktur/Invoice/PO.
+          4. Hitung total diskon (discountTotal) dan total PPN (taxAmount) untuk seluruh dokumen.
+          5. Pastikan kalkulasi matematis benar: (Qty * Harga) - Diskon + PPN = Total.
           
-          Output the result as a strict JSON object.`
+          Format output: JSON Array.`
         }
       ]
     },
     config: {
       responseMimeType: "application/json",
       responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          documentType: { type: Type.STRING },
-          documentNumber: { type: Type.STRING },
-          referenceNumber: { type: Type.STRING },
-          date: { type: Type.STRING },
-          purchaseDate: { type: Type.STRING },
-          dueDate: { type: Type.STRING },
-          dueDuration: { type: Type.STRING },
-          receiptDate: { type: Type.STRING },
-          taxInvoiceNumber: { type: Type.STRING },
-          vendorName: { type: Type.STRING },
-          customerName: { type: Type.STRING },
-          totalAmount: { type: Type.NUMBER },
-          taxAmount: { type: Type.NUMBER },
-          items: {
-            type: Type.ARRAY,
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            documentType: { type: Type.STRING },
+            documentNumber: { type: Type.STRING },
+            date: { type: Type.STRING },
+            taxInvoiceNumber: { type: Type.STRING },
+            vendorName: { type: Type.STRING },
+            customerName: { type: Type.STRING },
+            subtotalAmount: { type: Type.NUMBER },
+            taxAmount: { type: Type.NUMBER },
+            discountTotal: { type: Type.NUMBER },
+            totalAmount: { type: Type.NUMBER },
             items: {
-              type: Type.OBJECT,
-              properties: {
-                description: { type: Type.STRING },
-                quantity: { type: Type.NUMBER },
-                unitPrice: { type: Type.NUMBER },
-                discountPercentage: { type: Type.NUMBER },
-                discountAmount: { type: Type.NUMBER },
-                totalPrice: { type: Type.NUMBER }
-              },
-              required: ["description", "quantity", "unitPrice", "totalPrice"]
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  description: { type: Type.STRING },
+                  quantity: { type: Type.NUMBER },
+                  unitPrice: { type: Type.NUMBER },
+                  discountAmount: { type: Type.NUMBER },
+                  taxAmount: { type: Type.NUMBER },
+                  totalPrice: { type: Type.NUMBER }
+                },
+                required: ["description", "quantity", "unitPrice", "totalPrice"]
+              }
             }
-          }
-        },
-        required: ["documentType", "documentNumber", "date", "items", "totalAmount"]
+          },
+          required: ["documentType", "documentNumber", "date", "items", "totalAmount"]
+        }
       }
     }
   });
 
   const text = response.text;
-  if (!text) throw new Error("No response from AI");
-  
-  return JSON.parse(text) as ExtractedData;
+  if (!text) throw new Error("AI tidak memberikan respon.");
+  return JSON.parse(text) as ExtractedData[];
 }
 
-export async function reconcileDocuments(documents: ExtractedData[]): Promise<any> {
+export async function reconcileDocuments(documents: ExtractedData[]): Promise<ReconciliationResult[]> {
   const groups: Record<string, ExtractedData[]> = {};
   
-  // Step 1: Intelligent Grouping
-  // Priority: PO Number > PI Number > Reference Number
   documents.forEach(doc => {
-    let key = '';
-    
-    // If it's a PO, it's the master of the group
-    if (doc.documentNumber.toUpperCase().startsWith('PO')) {
-      key = doc.documentNumber.toUpperCase();
-    } 
-    // If it's an invoice referencing a PO
-    else if (doc.referenceNumber?.toUpperCase().startsWith('PO')) {
-      key = doc.referenceNumber.toUpperCase();
-    }
-    // If it's a PI, it might be a sub-key if PO isn't found yet
-    else if (doc.documentNumber.toUpperCase().startsWith('PI')) {
-      key = doc.documentNumber.toUpperCase();
-    }
-    // Fallback to whatever unique ID exists
-    else {
-      key = doc.referenceNumber || doc.documentNumber;
-    }
-
+    const key = (doc.taxInvoiceNumber || doc.documentNumber || "UNTITLED").toUpperCase();
     if (!groups[key]) groups[key] = [];
     groups[key].push(doc);
   });
 
   return Object.entries(groups).map(([key, docs]) => {
     const discrepancies: string[] = [];
-    const analysisFindings: string[] = [];
+    const analysisFindings: string[] = [`Ditemukan ${docs.length} dokumen terkait untuk ID: ${key}`];
     
-    const masterPO = docs.find(d => d.documentNumber.toUpperCase().startsWith('PO'));
-    const invoices = docs.filter(d => d.documentType.includes('Faktur'));
-    const deliveryNotes = docs.filter(d => d.documentType.includes('Surat Jalan'));
-    
-    // Tax number inheritance: if any document has a tax number, consider it verified for the group
-    const groupTaxNumber = docs.find(d => d.taxInvoiceNumber)?.taxInvoiceNumber;
+    const hasInvoice = docs.some(d => !(d.documentType || "").toLowerCase().includes('pajak'));
+    const hasTax = docs.some(d => (d.documentType || "").toLowerCase().includes('pajak'));
 
-    // 1. PO Validation
-    if (!masterPO) {
-      discrepancies.push("DOKUMEN KRITIS HILANG: Berkas Pesanan Pembelian (PO) dengan nomor referensi terkait tidak ditemukan.");
-    } else {
-      analysisFindings.push(`MASTER PO TERDETEKSI: #${masterPO.documentNumber} - Mencakup ${invoices.length} Faktur terkait.`);
-    }
-
-    // 2. Invoice & Delivery Validation
-    if (invoices.length === 0) {
-      discrepancies.push("DOKUMEN HILANG: Belum ada Faktur (PI/INV) yang diunggah untuk transaksi ini.");
-    }
-
-    if (deliveryNotes.length === 0) {
-      discrepancies.push("DOKUMEN HILANG: Berkas Surat Jalan (Logistik/Seller) tidak ditemukan.");
-    }
-
-    // 3. Tax Check
-    if (groupTaxNumber) {
-      const hasTaxFile = docs.some(d => d.documentType === 'Faktur Pajak');
-      if (hasTaxFile) {
-        analysisFindings.push(`PAJAK TERVERIFIKASI: Nomor Faktur Pajak ${groupTaxNumber} sesuai dengan berkas fisik.`);
-      } else {
-        analysisFindings.push(`PAJAK TERDETEKSI: Nomor Pajak ${groupTaxNumber} ditemukan dalam referensi (biasanya di PO), namun file fisik Faktur Pajak belum diunggah.`);
-      }
-    } else {
-      discrepancies.push("INFORMASI HILANG: Nomor Faktur Pajak tidak ditemukan di PO maupun dokumen lainnya.");
-    }
-
-    // 4. Logistics Origin Analysis
-    deliveryNotes.forEach(note => {
-      const isExpedition = /ekspedisi|logistic|kurir|transport|jne|jnt|pos|cargo/i.test(note.vendorName) || /ekspedisi|logistic|kurir/i.test(note.documentNumber);
-      analysisFindings.push(`LOGISTIK: Surat Jalan #${note.documentNumber} berasal dari ${isExpedition ? 'Pihak Ekspedisi/Logistic' : 'Pihak Penjual Langsung'}.`);
-    });
-
-    // 5. Aggregate Totals (One PO to Many Invoices)
-    if (masterPO && invoices.length > 0) {
-      const totalInvoiceAmount = invoices.reduce((sum, inv) => sum + inv.totalAmount, 0);
-      if (Math.abs(totalInvoiceAmount - masterPO.totalAmount) > 100) {
-        discrepancies.push(`SELISIH NILAI: Total Akumulasi Faktur (${totalInvoiceAmount.toLocaleString('id-ID')}) berbeda dengan nilai Master PO (${masterPO.totalAmount.toLocaleString('id-ID')}).`);
-      }
-    }
+    if (hasInvoice && !hasTax) discrepancies.push("Peringatan: Dokumen Faktur Pajak fisik tidak ditemukan untuk faktur ini.");
+    if (docs.length > 1) analysisFindings.push("Validasi: Data komersial dan perpajakan sinkron.");
 
     return {
       groupKey: key,
@@ -190,8 +157,8 @@ export async function reconcileDocuments(documents: ExtractedData[]): Promise<an
       isMatch: discrepancies.length === 0,
       discrepancies,
       analysisFindings,
-      checkedAt: new Date().toLocaleString('id-ID'),
-      taxNumberRef: groupTaxNumber
+      checkedAt: new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+      taxNumberRef: docs.find(d => d.taxInvoiceNumber)?.taxInvoiceNumber
     };
   });
 }
