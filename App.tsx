@@ -2,23 +2,16 @@
 import React, { useState, useEffect } from 'react';
 import { 
   FileText, Upload, CheckCircle2, Loader2, LayoutDashboard, ClipboardList, Search,
-  Building2, X, Printer, Trash2, Package, Receipt, Activity,
-  FileSearch, FileCheck, Hash, Stamp, Files, Clock, ChevronDown, ChevronUp, Split, Calendar,
-  AlertCircle, FileDown, TrendingUp, ShieldCheck, Tag, Info
+  X, Printer, Trash2, Package, Receipt, Activity, AlertCircle,
+  FileSearch, FileCheck, Hash, Stamp, Files, Clock, ChevronDown, ChevronUp, Split,
+  FileDown, TrendingUp, ShieldCheck, Info, ChevronRight, ListOrdered, Tag, 
+  Calculator, PieChart, BarChart3, ArrowUpRight
 } from 'lucide-react';
 import { ProcessingFile, ExtractedData, ReconciliationResult } from './types';
 import { optimizeImage, processDocument, reconcileDocuments } from './services/geminiService';
 
 const STORAGE_KEY_FILES = 'documatch_files';
 const STORAGE_KEY_RECON = 'documatch_recon';
-
-const LOADING_STATUSES = [
-  "Menganalisis struktur dokumen...",
-  "Mendeteksi rincian PPN per item...",
-  "Menghitung akumulasi pajak barang...",
-  "Memvalidasi total nilai faktur...",
-  "Menyusun laporan audit PDF...",
-];
 
 const App: React.FC = () => {
   const [files, setFiles] = useState<ProcessingFile[]>(() => {
@@ -32,11 +25,11 @@ const App: React.FC = () => {
   });
 
   const [isProcessing, setIsProcessing] = useState(false);
-  const [statusIdx, setStatusIdx] = useState(0);
+  const [isDownloading, setIsDownloading] = useState(false);
   const [view, setView] = useState<'upload' | 'dashboard' | 'reconciliation'>('upload');
-  const [selectedDoc, setSelectedDoc] = useState<ExtractedData | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [expandedDashboardDocs, setExpandedDashboardDocs] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     const filesToSave = files.map(({ file, ...rest }: any) => ({ ...rest }));
@@ -47,15 +40,13 @@ const App: React.FC = () => {
     localStorage.setItem(STORAGE_KEY_RECON, JSON.stringify(reconResults));
   }, [reconResults]);
 
-  useEffect(() => {
-    let interval: any;
-    if (isProcessing) {
-      interval = setInterval(() => {
-        setStatusIdx(prev => (prev + 1) % LOADING_STATUSES.length);
-      }, 3000);
-    }
-    return () => clearInterval(interval);
-  }, [isProcessing]);
+  const toggleDashboardDoc = (id: string) => {
+    setExpandedDashboardDocs(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const toggleGroup = (key: string) => {
+    setExpandedGroups(prev => ({ ...prev, [key]: !prev[key] }));
+  };
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (!event.target.files) return;
@@ -66,12 +57,6 @@ const App: React.FC = () => {
       status: 'pending' as const
     }));
     setFiles(prev => [...prev, ...newFiles]);
-  };
-
-  const handleDeleteFile = (id: string) => {
-    if (confirm("Hapus file ini dari daftar antrean?")) {
-      setFiles(prev => prev.filter(f => f.id !== id));
-    }
   };
 
   const processAllFiles = async () => {
@@ -90,160 +75,200 @@ const App: React.FC = () => {
       try {
         updatedFiles[i].status = 'processing';
         setFiles([...updatedFiles]);
-        
         const fileObj = (updatedFiles[i] as any).file;
-        if (!fileObj) {
-          updatedFiles[i].status = 'error';
-          continue;
-        }
-
         const base64 = await optimizeImage(fileObj);
         const docs = await processDocument(base64, fileObj.type);
-        
         updatedFiles[i].extractedDocs = docs;
         updatedFiles[i].status = 'completed';
-        updatedFiles[i].processedAt = new Date().toLocaleString('id-ID');
         allExtracted.push(...docs);
-      } catch (error) {
-        console.error("Error:", error);
+      } catch (error: any) {
         updatedFiles[i].status = 'error';
+        updatedFiles[i].errorMessage = error.message;
+        console.error(error);
       }
       setFiles([...updatedFiles]);
     }
 
-    if (allExtracted.length > 0) {
-      const results = await reconcileDocuments(allExtracted);
+    const completedDocs = updatedFiles.flatMap(f => f.extractedDocs || []);
+    if (completedDocs.length > 0) {
+      const results = await reconcileDocuments(completedDocs);
       setReconResults(results);
     }
-    
     setIsProcessing(false);
+  };
+
+  const handlePrint = () => {
+    const element = document.getElementById('printable-area');
+    if (!element) return;
+    setIsDownloading(true);
+    
+    const opt = {
+      margin: 10,
+      filename: `Laporan_Audit_DocuMatch_${new Date().toISOString().split('T')[0]}.pdf`,
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true, logging: false },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+    };
+
+    // @ts-ignore
+    html2pdf().set(opt).from(element).save().then(() => setIsDownloading(false));
   };
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(amount);
   };
 
-  const toggleGroup = (key: string) => {
-    setExpandedGroups(prev => ({
-      ...prev,
-      [key]: !prev[key]
-    }));
+  // Statistik Kesimpulan
+  const allDocs = files.flatMap(f => f.extractedDocs || []);
+  const stats = {
+    totalDocs: allDocs.length,
+    totalPPN: allDocs.reduce((acc, d) => acc + (d.taxAmount || 0), 0),
+    totalDiscount: allDocs.reduce((acc, d) => acc + (d.discountTotal || 0), 0),
+    totalGrand: allDocs.reduce((acc, d) => acc + (d.totalAmount || 0), 0),
   };
 
-  const totalInvoices = reconResults.reduce((acc, curr) => acc + curr.documents.length, 0);
-  const totalAmountAudit = reconResults.reduce((acc, curr) => 
-    acc + curr.documents.reduce((docAcc, doc) => docAcc + doc.totalAmount, 0), 0
-  );
-  const totalTaxAudit = reconResults.reduce((acc, curr) => 
-    acc + curr.documents.reduce((docAcc, doc) => docAcc + (doc.taxAmount || 0), 0), 0
+  const filteredDashboardDocs = allDocs.filter(doc => 
+    doc.documentNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (doc.taxInvoiceNumber || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+    doc.vendorName.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   return (
     <div className="flex min-h-screen bg-[#F8FAFC]">
       {/* Sidebar */}
-      <aside className="w-72 bg-slate-900 text-white hidden lg:flex flex-col no-print shadow-2xl">
+      <aside className="w-72 bg-slate-900 text-white hidden lg:flex flex-col no-print fixed h-full shadow-2xl">
         <div className="p-8">
           <div className="flex items-center gap-3 mb-12">
-            <div className="bg-blue-600 p-2 rounded-xl shadow-lg shadow-blue-500/20"><ClipboardList size={24} /></div>
-            <span className="font-black text-xl tracking-tighter uppercase">DocuMatch AI</span>
+            <div className="bg-blue-600 p-2.5 rounded-2xl shadow-lg shadow-blue-500/20"><ClipboardList size={26} /></div>
+            <span className="font-black text-2xl tracking-tighter uppercase">DocuMatch</span>
           </div>
-          <nav className="space-y-3">
-            <button onClick={() => setView('upload')} className={`w-full flex items-center gap-4 px-5 py-4 rounded-xl transition-all font-bold text-sm ${view === 'upload' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}><Upload size={18} /> Unggah Bundle</button>
-            <button onClick={() => setView('dashboard')} className={`w-full flex items-center gap-4 px-5 py-4 rounded-xl transition-all font-bold text-sm ${view === 'dashboard' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}><LayoutDashboard size={18} /> Data Terurai</button>
-            <button onClick={() => setView('reconciliation')} className={`w-full flex items-center gap-4 px-5 py-4 rounded-xl transition-all font-bold text-sm ${view === 'reconciliation' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}><Activity size={18} /> Laporan Audit</button>
+          <nav className="space-y-4">
+            <button onClick={() => setView('upload')} className={`w-full flex items-center gap-4 px-6 py-4 rounded-2xl font-bold text-sm transition-all ${view === 'upload' ? 'bg-blue-600 shadow-lg shadow-blue-600/30' : 'text-slate-400 hover:bg-slate-800'}`}><Upload size={18} /> Unggah Bundle</button>
+            <button onClick={() => setView('dashboard')} className={`w-full flex items-center gap-4 px-6 py-4 rounded-2xl font-bold text-sm transition-all ${view === 'dashboard' ? 'bg-blue-600 shadow-lg shadow-blue-600/30' : 'text-slate-400 hover:bg-slate-800'}`}><LayoutDashboard size={18} /> Data Terurai</button>
+            <button onClick={() => setView('reconciliation')} className={`w-full flex items-center gap-4 px-6 py-4 rounded-2xl font-bold text-sm transition-all ${view === 'reconciliation' ? 'bg-blue-600 shadow-lg shadow-blue-600/30' : 'text-slate-400 hover:bg-slate-800'}`}><Activity size={18} /> Laporan Audit</button>
           </nav>
         </div>
-        <div className="mt-auto p-8 border-t border-slate-800">
-           <button onClick={() => {if(confirm("Hapus semua data?")) { localStorage.clear(); location.reload(); }}} className="w-full flex items-center gap-4 px-5 py-4 text-red-400 text-xs font-bold uppercase hover:bg-red-500/10 rounded-xl transition-all"><Trash2 size={16} /> Bersihkan Data</button>
+        <div className="mt-auto p-8 border-t border-white/5">
+           <div className="bg-slate-800/50 p-4 rounded-2xl">
+              <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Sistem Status</p>
+              <div className="flex items-center gap-2">
+                 <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                 <span className="text-[11px] font-bold text-slate-300">AI Engine Ready</span>
+              </div>
+           </div>
         </div>
       </aside>
 
-      <main className="flex-1 overflow-auto">
-        <header className="h-20 bg-white border-b flex items-center justify-between px-10 sticky top-0 z-10 no-print">
+      <main className="flex-1 lg:ml-72 min-h-screen">
+        <header className="h-20 bg-white border-b flex items-center justify-between px-10 sticky top-0 z-10 no-print shadow-sm">
           <div>
             <h1 className="text-xl font-black text-slate-800 uppercase tracking-tighter">Finance Audit Hub</h1>
-            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">CV Global Solusi • Sistem Rekonsiliasi Otomatis</p>
+            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Digital Tax Reconciliation System</p>
           </div>
-          <div className="flex items-center gap-6">
-            <div className="relative">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-              <input 
-                type="text" 
-                placeholder="Cari ID Faktur..." 
-                className="pl-12 pr-6 py-2.5 bg-slate-100 rounded-full text-sm outline-none w-64 border-none focus:ring-2 focus:ring-blue-500/20 font-medium"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
+          <div className="flex items-center gap-4">
+            {(view === 'reconciliation' || view === 'dashboard') && allDocs.length > 0 && (
+              <button 
+                onClick={handlePrint}
+                disabled={isDownloading}
+                className="bg-slate-900 text-white px-6 py-3 rounded-2xl text-xs font-black uppercase flex items-center gap-3 hover:bg-slate-800 disabled:bg-slate-400 transition-all shadow-lg"
+              >
+                {isDownloading ? <Loader2 size={16} className="animate-spin" /> : <Printer size={16} />} 
+                {isDownloading ? "Generating PDF..." : "Cetak Laporan Audit"}
+              </button>
+            )}
+            <div className="w-px h-8 bg-slate-200" />
+            <div className="flex items-center gap-3 pl-2">
+               <div className="w-9 h-9 bg-slate-100 rounded-full flex items-center justify-center text-slate-500 font-black text-xs uppercase">GS</div>
             </div>
           </div>
         </header>
 
-        {/* Kop Surat Laporan (Hanya Muncul Saat Print) */}
-        <div className="hidden print:block p-12 text-center border-b-[6px] border-slate-900 mb-10">
-           <div className="flex items-center justify-between mb-8">
-              <div className="text-left">
-                 <h1 className="text-4xl font-black uppercase tracking-tighter text-slate-900 leading-none">CV GLOBAL SOLUSI</h1>
-                 <p className="text-sm font-bold text-slate-500 uppercase tracking-widest mt-2">Jl. Audit Digital No. 102, Jakarta Selatan</p>
-                 <p className="text-xs text-slate-400 font-medium">Email: finance@globalsolusi.co.id | Telp: (021) 555-0192</p>
-              </div>
-              <div className="bg-slate-900 text-white p-6 rounded-3xl">
-                 <ShieldCheck size={48} />
-              </div>
-           </div>
-           <div className="bg-slate-50 py-4 border-y-2 border-slate-200">
-              <h2 className="text-2xl font-black uppercase tracking-widest text-slate-800">LAPORAN REKONSILIASI GABUNGAN (PDF)</h2>
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.5em] mt-1">Generated by DocuMatch AI Hub • PPN Rincian Terverifikasi</p>
-           </div>
-        </div>
+        <div id="printable-area" className="p-8 lg:p-12 max-w-6xl mx-auto space-y-10">
+          
+          {/* Summary Section - KESIMPULAN UTAMA DI ATAS */}
+          {(view === 'dashboard' || view === 'reconciliation') && allDocs.length > 0 && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-top-4 duration-700">
+               <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest flex items-center gap-2">
+                     <BarChart3 size={18} className="text-blue-600" /> Kesimpulan Ringkasan Audit
+                  </h3>
+                  <span className="text-[10px] font-bold text-slate-400 bg-slate-100 px-3 py-1 rounded-full uppercase">Periode: {new Date().toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}</span>
+               </div>
+               <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                  <div className="bg-white p-6 rounded-[32px] border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Total Dokumen</p>
+                     <p className="text-2xl font-black text-slate-900 flex items-center gap-2">{stats.totalDocs} <span className="text-xs text-slate-400 font-bold">Berkas</span></p>
+                  </div>
+                  <div className="bg-white p-6 rounded-[32px] border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Total Diskon</p>
+                     <p className="text-2xl font-black text-red-600 tracking-tighter">-{formatCurrency(stats.totalDiscount)}</p>
+                  </div>
+                  <div className="bg-white p-6 rounded-[32px] border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Total PPN (12%)</p>
+                     <p className="text-2xl font-black text-green-600 tracking-tighter">{formatCurrency(stats.totalPPN)}</p>
+                  </div>
+                  <div className="bg-slate-900 p-6 rounded-[32px] shadow-xl shadow-slate-900/20 transform hover:-translate-y-1 transition-transform">
+                     <p className="text-[9px] font-black text-white/40 uppercase tracking-widest mb-1">Grand Total (Net)</p>
+                     <p className="text-2xl font-black text-white tracking-tighter">{formatCurrency(stats.totalGrand)}</p>
+                  </div>
+               </div>
+            </div>
+          )}
 
-        <div className="p-8 lg:p-12 max-w-6xl mx-auto space-y-10">
           {view === 'upload' && (
-            <div className="space-y-10 animate-in fade-in">
-              <div className="bg-white rounded-[40px] border-4 border-dashed border-slate-200 p-20 text-center hover:border-blue-500 hover:bg-blue-50/10 transition-all relative group cursor-pointer shadow-xl shadow-slate-200/50">
+            <div className="space-y-10">
+              <div className="bg-white rounded-[40px] border-4 border-dashed border-slate-200 p-16 text-center hover:border-blue-500 transition-all relative cursor-pointer shadow-xl shadow-slate-200/50 no-print">
                 <input type="file" multiple onChange={handleFileSelect} className="absolute inset-0 opacity-0 cursor-pointer" accept="image/*,.pdf" />
-                <div className="mx-auto w-24 h-24 bg-blue-50 rounded-3xl flex items-center justify-center text-blue-600 mb-8 group-hover:scale-110 transition-all"><Upload size={40} /></div>
-                <h3 className="text-2xl font-black text-slate-900 uppercase">Drop Bundle Faktur Anda</h3>
-                <p className="text-slate-500 font-medium mt-4 max-w-md mx-auto">AI akan merinci PPN setiap baris barang dan mengakumulasikannya secara otomatis.</p>
+                <div className="mx-auto w-24 h-24 bg-blue-50 rounded-[40px] flex items-center justify-center text-blue-600 mb-8 shadow-inner"><Upload size={40} /></div>
+                <h3 className="text-2xl font-black text-slate-900 uppercase tracking-tight">Input Bundle Faktur & Nota</h3>
+                <p className="text-slate-500 font-medium mt-3 max-w-sm mx-auto">Tarik & letakkan file atau klik untuk mengunggah bundle dokumen pajak (Faktur, PO, Surat Jalan).</p>
+                <div className="mt-8 flex justify-center gap-4">
+                   <span className="px-4 py-2 bg-slate-50 rounded-full text-[10px] font-black text-slate-400 uppercase border border-slate-100">Supports PDF & Images</span>
+                   <span className="px-4 py-2 bg-slate-50 rounded-full text-[10px] font-black text-slate-400 uppercase border border-slate-100">Multi-page Scanning</span>
+                </div>
               </div>
 
               {files.length > 0 && (
-                <div className="bg-white rounded-[32px] border border-slate-200 shadow-2xl overflow-hidden">
-                  <div className="px-10 py-8 border-b bg-slate-50 flex justify-between items-center">
-                    <h2 className="font-black uppercase text-slate-800 flex items-center gap-3"><FileSearch size={20} className="text-blue-600" /> Bundle Antrean ({files.length})</h2>
+                <div className="bg-white rounded-[40px] border border-slate-200 shadow-2xl overflow-hidden no-print animate-in slide-in-from-bottom-8 duration-500">
+                  <div className="px-12 py-10 border-b bg-slate-50/50 flex justify-between items-center">
+                    <div>
+                      <h2 className="font-black text-xl uppercase text-slate-800 flex items-center gap-4"><FileSearch size={24} className="text-blue-600" /> Antrean Bundle ({files.length} File)</h2>
+                      <p className="text-[11px] font-bold text-blue-600 uppercase mt-2 bg-blue-50 px-3 py-1 rounded-full w-fit">Status: {isProcessing ? 'Sedang Menganalisis...' : 'Siap Diproses'}</p>
+                    </div>
                     <button 
                       onClick={processAllFiles} 
-                      disabled={isProcessing}
-                      className="bg-blue-600 text-white px-8 py-4 rounded-2xl text-sm font-black flex items-center gap-3 uppercase shadow-lg shadow-blue-500/20 active:scale-95 transition-all disabled:bg-slate-300"
+                      disabled={isProcessing} 
+                      className="bg-blue-600 text-white px-10 py-5 rounded-3xl text-sm font-black flex items-center gap-4 uppercase disabled:bg-slate-300 transition-all hover:scale-105 active:scale-95 shadow-xl shadow-blue-600/20"
                     >
-                      {isProcessing ? <Loader2 className="animate-spin" size={18} /> : <CheckCircle2 size={18} />} {isProcessing ? "Menganalisis Pajak..." : "Ekstrak Sekarang"}
+                      {isProcessing ? <Loader2 className="animate-spin" size={20} /> : <CheckCircle2 size={20} />} 
+                      {isProcessing ? 'Processing Deep Scan...' : 'Jalankan Analisis Bundle'}
                     </button>
                   </div>
-                  
-                  {isProcessing && (
-                    <div className="bg-blue-600 text-white p-6 text-center animate-pulse flex flex-col items-center gap-2">
-                       <p className="font-black uppercase tracking-widest text-lg animate-bounce">{LOADING_STATUSES[statusIdx]}</p>
-                       <p className="text-xs text-blue-100 font-bold uppercase">Memproses rincian PPN per item barang...</p>
-                    </div>
-                  )}
-
                   <div className="divide-y divide-slate-100">
                     {files.map(f => (
-                      <div key={f.id} className="px-10 py-6 flex items-center gap-6 hover:bg-slate-50 transition-all group">
-                        <div className="w-12 h-16 bg-slate-100 rounded-xl flex items-center justify-center text-slate-400"><FileText size={24} /></div>
+                      <div key={f.id} className="px-12 py-8 flex items-center gap-8 group hover:bg-slate-50 transition-colors">
+                        <div className={`w-14 h-18 rounded-2xl flex items-center justify-center shadow-sm ${f.status === 'completed' ? 'bg-green-100 text-green-600' : 'bg-slate-100 text-slate-400'}`}>
+                           {f.status === 'processing' ? <Loader2 className="animate-spin" size={24} /> : <FileText size={28} />}
+                        </div>
                         <div className="flex-1">
-                           <p className="font-black text-slate-800">{f.fileName}</p>
-                           <div className="flex items-center gap-3 mt-1">
-                              <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded border ${f.status === 'completed' ? 'bg-green-50 text-green-600 border-green-100' : f.status === 'error' ? 'bg-red-50 text-red-600 border-red-100' : 'bg-slate-50 text-slate-400'}`}>{f.status}</span>
-                              {f.extractedDocs && <span className="text-[9px] font-black text-blue-600 uppercase bg-blue-50 px-2 py-0.5 rounded border border-blue-100 tracking-tighter">{f.extractedDocs.length} Dokumen Terdeteksi</span>}
+                           <p className="font-black text-lg text-slate-800 truncate max-w-md">{f.fileName}</p>
+                           <div className="flex items-center gap-4 mt-2">
+                              <span className={`text-[10px] font-black uppercase px-3 py-1 rounded-full border ${f.status === 'completed' ? 'bg-green-50 text-green-600 border-green-200' : f.status === 'error' ? 'bg-red-50 text-red-600 border-red-200' : 'bg-slate-100 text-slate-500 border-slate-200'}`}>
+                                 {f.status}
+                              </span>
+                              {f.extractedDocs && (
+                                <span className="bg-blue-600 text-white text-[10px] font-black px-3 py-1 rounded-full flex items-center gap-2">
+                                  <Tag size={12} /> {f.extractedDocs.length} DOKUMEN TERDETEKSI
+                                </span>
+                              )}
+                              {f.status === 'error' && (
+                                <span className="text-[10px] font-bold text-red-500 flex items-center gap-1">
+                                   <AlertCircle size={12} /> {f.errorMessage}
+                                </span>
+                              )}
                            </div>
                         </div>
-                        <button 
-                          onClick={() => handleDeleteFile(f.id)}
-                          disabled={isProcessing}
-                          className="p-3 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all opacity-0 group-hover:opacity-100 disabled:opacity-0"
-                        >
-                          <Trash2 size={20} />
-                        </button>
+                        <button onClick={() => setFiles(prev => prev.filter(x => x.id !== f.id))} disabled={isProcessing} className="p-4 text-slate-300 hover:text-red-500 transition-colors"><Trash2 size={24} /></button>
                       </div>
                     ))}
                   </div>
@@ -253,38 +278,86 @@ const App: React.FC = () => {
           )}
 
           {view === 'dashboard' && (
-            <div className="bg-white rounded-[32px] border border-slate-200 shadow-xl overflow-hidden animate-in fade-in">
-              <div className="p-8 border-b bg-slate-50 flex justify-between items-center">
-                 <h2 className="text-lg font-black uppercase tracking-tight">Database Hasil Ekstraksi & Pajak</h2>
+            <div className="bg-white rounded-[40px] border border-slate-200 shadow-xl overflow-hidden animate-in fade-in duration-500">
+              <div className="p-10 border-b bg-slate-50/50 flex justify-between items-center no-print">
+                 <div className="relative">
+                    <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                    <input 
+                      type="text" 
+                      placeholder="Cari Nomor Faktur, NSFP, atau Nama Vendor..." 
+                      className="pl-14 pr-8 py-4 bg-white border border-slate-200 rounded-[24px] text-sm outline-none w-[400px] focus:ring-4 focus:ring-blue-500/10 transition-all font-medium"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                    />
+                 </div>
+                 <div className="text-right">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Urut Berdasarkan</p>
+                    <p className="text-xs font-bold text-slate-900 uppercase">Input Terbaru</p>
+                 </div>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-left">
-                  <thead className="bg-slate-900 text-white text-[10px] font-black uppercase tracking-widest">
+                  <thead className="bg-slate-900 text-white text-[10px] font-black uppercase tracking-[0.2em]">
                     <tr>
-                      <th className="px-8 py-6">ID Faktur</th>
-                      <th className="px-8 py-6">Tanggal</th>
-                      <th className="px-8 py-6">Vendor</th>
-                      <th className="px-8 py-6 text-right">PPN (Rincian)</th>
-                      <th className="px-8 py-6 text-right">Total Akhir</th>
-                      <th className="px-8 py-6 text-center no-print">Tindakan</th>
+                      <th className="px-8 py-8 w-16 text-center no-print"></th>
+                      <th className="px-10 py-8">Identitas Dokumen</th>
+                      <th className="px-10 py-8">Entitas Vendor</th>
+                      <th className="px-10 py-8 text-right">PPN Masukan</th>
+                      <th className="px-10 py-8 text-right">Grand Total</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {files.flatMap(f => f.extractedDocs || []).map((doc, idx) => (
-                      <tr key={idx} className="hover:bg-slate-50 transition-all text-sm font-medium">
-                        <td className="px-8 py-6">
-                          <div className="font-black text-slate-900 uppercase">#{doc.documentNumber}</div>
-                          <div className="text-[9px] font-black text-blue-600 uppercase tracking-tighter">{doc.taxInvoiceNumber || 'Non-Pajak'}</div>
-                        </td>
-                        <td className="px-8 py-6 text-slate-500">{doc.date}</td>
-                        <td className="px-8 py-6 text-slate-800 font-bold uppercase">{doc.vendorName}</td>
-                        <td className="px-8 py-6 text-right font-black text-green-600">+{formatCurrency(doc.taxAmount || 0)}</td>
-                        <td className="px-8 py-6 text-right font-black text-slate-900">{formatCurrency(doc.totalAmount)}</td>
-                        <td className="px-8 py-6 text-center no-print">
-                          <button onClick={() => setSelectedDoc(doc)} className="bg-slate-100 hover:bg-blue-600 hover:text-white px-4 py-2 rounded-lg text-blue-600 font-black text-[9px] uppercase tracking-widest transition-all active:scale-95">Rincian</button>
-                        </td>
-                      </tr>
-                    ))}
+                    {filteredDashboardDocs.map((doc, idx) => {
+                      const isExpanded = expandedDashboardDocs[doc.documentNumber];
+                      return (
+                        <React.Fragment key={idx}>
+                          <tr onClick={() => toggleDashboardDoc(doc.documentNumber)} className="cursor-pointer hover:bg-slate-50 transition-all group">
+                            <td className="px-8 py-8 text-center no-print">
+                               <ChevronRight size={20} className={`text-slate-300 transition-transform duration-300 ${isExpanded ? 'rotate-90 text-blue-600' : 'group-hover:text-slate-500'}`} />
+                            </td>
+                            <td className="px-10 py-8">
+                              <div className="font-black text-slate-900 text-base">#{doc.documentNumber}</div>
+                              <div className="text-[10px] font-black text-blue-600 uppercase tracking-tighter mt-1">NSFP: {doc.taxInvoiceNumber || 'NON-PKP / INTERNAL'}</div>
+                            </td>
+                            <td className="px-10 py-8 text-slate-800 font-bold uppercase text-xs">{doc.vendorName}</td>
+                            <td className="px-10 py-8 text-right font-black text-green-600">{formatCurrency(doc.taxAmount || 0)}</td>
+                            <td className="px-10 py-8 text-right font-black text-slate-900">{formatCurrency(doc.totalAmount)}</td>
+                          </tr>
+                          {isExpanded && (
+                            <tr className="bg-slate-50/50">
+                              <td colSpan={5} className="px-16 py-10">
+                                <div className="bg-white rounded-[24px] border border-slate-200 overflow-hidden shadow-lg animate-in slide-in-from-top-2 duration-300">
+                                   <table className="w-full text-xs">
+                                      <thead className="bg-slate-100/50 text-[10px] font-black uppercase text-slate-400">
+                                         <tr>
+                                            <th className="px-8 py-4">Deskripsi Barang/Jasa</th>
+                                            <th className="px-6 py-4 text-center">Qty</th>
+                                            <th className="px-8 py-4 text-right">Harga Satuan</th>
+                                            <th className="px-8 py-4 text-right text-red-500">Potongan</th>
+                                            <th className="px-8 py-4 text-right text-green-600">PPN (12%)</th>
+                                            <th className="px-8 py-4 text-right">Total Net</th>
+                                         </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-slate-50">
+                                         {doc.items.map((item, i) => (
+                                            <tr key={i} className="hover:bg-slate-50/30">
+                                               <td className="px-8 py-4 font-bold text-slate-900 uppercase">{item.description}</td>
+                                               <td className="px-6 py-4 text-center font-medium">{item.quantity}</td>
+                                               <td className="px-8 py-4 text-right text-slate-600">{formatCurrency(item.unitPrice)}</td>
+                                               <td className="px-8 py-4 text-right text-red-500">-{formatCurrency(item.discountAmount || 0)}</td>
+                                               <td className="px-8 py-4 text-right text-green-600 font-black">{formatCurrency(item.taxAmount || 0)}</td>
+                                               <td className="px-8 py-4 text-right font-black text-slate-900">{formatCurrency(item.totalPrice)}</td>
+                                            </tr>
+                                         ))}
+                                      </tbody>
+                                   </table>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -292,147 +365,115 @@ const App: React.FC = () => {
           )}
 
           {view === 'reconciliation' && (
-            <div className="space-y-8 animate-in fade-in duration-700">
-              <div className="flex justify-between items-end no-print">
-                 <div>
-                    <h2 className="text-4xl font-black text-slate-900 tracking-tighter">Laporan Audit Pajak</h2>
-                    <p className="text-xs font-bold text-slate-400 uppercase tracking-[0.3em] mt-2">PPN Akumulasi Rincian Barang (12%)</p>
-                 </div>
-                 <div className="flex gap-4">
-                    <button onClick={() => window.print()} className="bg-blue-600 text-white px-10 py-5 rounded-[24px] text-sm font-black flex items-center gap-4 uppercase shadow-2xl shadow-blue-500/30 hover:bg-blue-700 transition-all active:scale-95">
-                       <FileDown size={22} /> Export Laporan ke PDF
-                    </button>
-                 </div>
-              </div>
-
-              {/* Ringkasan Akumulasi */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
-                 <div className="bg-white p-8 rounded-[36px] border-2 border-slate-100 shadow-xl flex flex-col justify-between">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2"><Files size={14} /> Total Dokumen Audit</p>
-                    <div className="flex items-end justify-between">
-                       <h4 className="text-4xl font-black text-slate-900">{totalInvoices}</h4>
-                       <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded">Terverifikasi</span>
+            <div className="space-y-10 animate-in slide-in-from-bottom-6 duration-700">
+              <div className="no-print bg-blue-600 p-8 rounded-[40px] text-white flex items-center justify-between shadow-xl shadow-blue-600/20">
+                 <div className="flex items-center gap-6">
+                    <div className="bg-white/20 p-4 rounded-3xl"><Activity size={32} /></div>
+                    <div>
+                       <h2 className="text-2xl font-black uppercase tracking-tighter">Hasil Rekonsiliasi Pajak</h2>
+                       <p className="text-blue-100 text-xs font-bold uppercase tracking-widest mt-1">Audit Grouping Berdasarkan Nomor Seri Faktur Pajak</p>
                     </div>
                  </div>
-                 <div className="bg-white p-8 rounded-[36px] border-2 border-slate-100 shadow-xl flex flex-col justify-between border-green-100 ring-2 ring-green-50">
-                    <p className="text-[10px] font-black text-green-600 uppercase tracking-widest mb-4 flex items-center gap-2"><TrendingUp size={14} /> Total PPN (Akumulasi Item)</p>
-                    <div className="flex items-end justify-between">
-                       <h4 className="text-2xl lg:text-3xl font-black text-green-600">{formatCurrency(totalTaxAudit)}</h4>
-                       <span className="text-[8px] font-black text-green-500 bg-green-50 px-2 py-1 rounded uppercase tracking-tighter">Verified 12%</span>
-                    </div>
-                 </div>
-                 <div className="bg-slate-900 p-8 rounded-[36px] shadow-2xl shadow-slate-900/20 flex flex-col justify-between">
-                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4 flex items-center gap-2"><Receipt size={14} /> Grand Total Ekuitas</p>
-                    <div className="flex items-end justify-between">
-                       <h4 className="text-2xl lg:text-3xl font-black text-blue-400">{formatCurrency(totalAmountAudit)}</h4>
-                    </div>
+                 <div className="bg-white/10 px-6 py-4 rounded-[24px] text-right border border-white/10">
+                    <p className="text-[10px] font-black uppercase opacity-60">Status Verifikasi</p>
+                    <p className="text-lg font-black uppercase">Exhaustive Scan</p>
                  </div>
               </div>
 
               {reconResults.map((result, idx) => (
-                <div key={idx} className="bg-white rounded-[48px] border border-slate-200 shadow-2xl overflow-hidden mb-12 break-inside-avoid print:shadow-none print:border-slate-300 print:rounded-[32px]">
-                  <div 
-                    onClick={() => toggleGroup(result.groupKey)}
-                    className={`p-10 border-b flex items-center justify-between cursor-pointer transition-all ${result.isMatch ? 'bg-green-50/20' : 'bg-red-50/20'} print:bg-slate-50`}
-                  >
+                <div key={idx} className="bg-white rounded-[40px] border border-slate-200 shadow-xl overflow-hidden break-inside-avoid transform hover:shadow-2xl transition-shadow duration-500">
+                  <div onClick={() => toggleGroup(result.groupKey)} className={`p-10 border-b flex items-center justify-between cursor-pointer transition-colors ${result.taxNumberRef ? 'bg-blue-50/10' : 'bg-slate-50/30'}`}>
                     <div className="flex items-center gap-10">
-                      <div className={`p-6 rounded-[28px] shadow-2xl print:shadow-none ${result.isMatch ? 'bg-green-500 text-white' : 'bg-red-500 text-white'}`}>
-                        {result.isMatch ? <FileCheck size={40} /> : <Activity size={40} />}
+                      <div className={`p-6 rounded-[24px] shadow-lg ${result.taxNumberRef ? 'bg-blue-600 text-white shadow-blue-500/20' : 'bg-slate-800 text-white'}`}>
+                        <Stamp size={36} />
                       </div>
                       <div>
-                        <h3 className="font-black text-2xl text-slate-900 uppercase tracking-tighter leading-none">ID Audit: {result.groupKey}</h3>
-                        <div className="flex flex-wrap items-center gap-6 mt-3">
-                           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2"><Clock size={12} /> Pengecekan: {result.checkedAt}</p>
-                           <p className="text-[10px] font-black text-green-600 uppercase tracking-widest flex items-center gap-2"><TrendingUp size={12} /> Pajak Terinci: {formatCurrency(result.documents.reduce((a,b) => a + (b.taxAmount || 0), 0))}</p>
-                        </div>
+                        <h3 className="font-black text-2xl text-slate-900 uppercase tracking-tighter">
+                          {result.taxNumberRef ? `PKP: ${result.taxNumberRef}` : `NON-PKP: ${result.groupKey.split('-')[1]}`}
+                        </h3>
+                        <p className="text-[11px] font-black uppercase text-slate-400 mt-2 flex items-center gap-2">
+                           <Clock size={12} /> Diverifikasi pada {result.checkedAt}
+                        </p>
                       </div>
                     </div>
-                    <div className="no-print">
-                       {expandedGroups[result.groupKey] ? <ChevronUp size={32} className="text-slate-300" /> : <ChevronDown size={32} className="text-slate-300" />}
-                    </div>
+                    <ChevronDown size={28} className={`text-slate-300 transition-transform duration-500 no-print ${expandedGroups[result.groupKey] ? 'rotate-180 text-blue-600' : ''}`} />
                   </div>
                   
                   {(expandedGroups[result.groupKey] || true) && (
-                    <div className={`p-10 lg:p-14 space-y-16 animate-in slide-in-from-top-4 duration-500 ${!expandedGroups[result.groupKey] ? 'hidden print:block' : ''}`}>
+                    <div className={`p-12 space-y-12 ${!expandedGroups[result.groupKey] ? 'hidden' : ''}`}>
                       {result.documents.map((doc, dIdx) => (
-                        <div key={dIdx} className="space-y-6">
-                           <div className="p-8 bg-slate-50 rounded-[40px] border border-slate-100 flex items-center justify-between print:bg-white print:border-slate-300 print:p-6">
+                        <div key={dIdx} className="space-y-8 animate-in fade-in duration-500">
+                           <div className="p-8 bg-slate-50 rounded-[32px] border border-slate-100 flex items-center justify-between shadow-inner">
                               <div className="flex items-center gap-6">
-                                 <div className="p-4 bg-white rounded-2xl shadow-sm border border-slate-100 text-blue-600 print:hidden"><FileText size={32} /></div>
+                                 <div className="bg-white p-3 rounded-2xl shadow-sm text-blue-600"><Files size={24} /></div>
                                  <div>
-                                    <h4 className="font-black text-xl text-slate-900 uppercase">#{doc.documentNumber}</h4>
-                                    <p className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-2 mt-1"><Stamp size={12} /> No. Pajak: {doc.taxInvoiceNumber || 'Non-Pajak'}</p>
+                                    <h4 className="font-black text-slate-900 text-lg uppercase tracking-tight">{doc.vendorName}</h4>
+                                    <p className="text-[11px] font-black text-slate-400 uppercase tracking-widest mt-1">Inv: #{doc.documentNumber} | Tanggal: {doc.date}</p>
                                  </div>
                               </div>
                               <div className="text-right">
-                                 <p className="text-[10px] font-black text-green-600 uppercase tracking-widest mb-1">Total PPN Terakumulasi</p>
+                                 <p className="text-[10px] font-black text-green-600 uppercase tracking-widest mb-1">Pajak Masukan (12%)</p>
                                  <p className="text-2xl font-black text-green-600 tracking-tighter">{formatCurrency(doc.taxAmount)}</p>
                               </div>
                            </div>
 
-                           <div className="overflow-hidden border-2 border-slate-100 rounded-[40px] bg-white print:border-slate-300 print:rounded-[24px]">
-                              <table className="w-full text-left text-[11px] print:text-[10px]">
-                                 <thead className="bg-slate-900 text-white font-black uppercase tracking-[0.2em]">
+                           <div className="overflow-hidden border border-slate-200 rounded-[32px] shadow-sm bg-white">
+                              <table className="w-full text-left text-xs">
+                                 <thead className="bg-slate-900 text-white font-black uppercase tracking-[0.1em]">
                                     <tr>
-                                       <th className="px-8 py-6 print:px-5">Uraian Barang</th>
-                                       <th className="px-6 py-6 text-center print:px-4">Qty</th>
-                                       <th className="px-6 py-6 text-right print:px-4">Harga Satuan</th>
-                                       <th className="px-6 py-6 text-right text-red-400 print:px-4">Diskon</th>
-                                       <th className="px-6 py-6 text-right text-green-400 print:px-4">PPN Rincian (12%)</th>
-                                       <th className="px-8 py-6 text-right print:px-5">Jumlah Bersih</th>
+                                       <th className="px-8 py-5">Rincian Komoditas</th>
+                                       <th className="px-6 py-5 text-center">Volume</th>
+                                       <th className="px-8 py-5 text-right">Harga Satuan</th>
+                                       <th className="px-8 py-5 text-right text-red-400">Pot.</th>
+                                       <th className="px-8 py-5 text-right text-green-400">PPN</th>
+                                       <th className="px-8 py-5 text-right">Total Net</th>
                                     </tr>
                                  </thead>
-                                 <tbody className="divide-y divide-slate-100 font-bold text-slate-700 bg-white">
+                                 <tbody className="divide-y divide-slate-100">
                                     {doc.items.map((item, iIdx) => (
-                                       <tr key={iIdx}>
-                                          <td className="px-8 py-5 uppercase font-black text-slate-900 leading-relaxed print:px-5">{item.description}</td>
-                                          <td className="px-6 py-5 text-center print:px-4">{item.quantity}</td>
-                                          <td className="px-6 py-5 text-right print:px-4">{formatCurrency(item.unitPrice)}</td>
-                                          <td className="px-6 py-5 text-right text-red-500 print:px-4">-{formatCurrency(item.discountAmount || 0)}</td>
-                                          <td className="px-6 py-5 text-right text-green-600 bg-green-50/30 print:px-4">{formatCurrency(item.taxAmount || 0)}</td>
-                                          <td className="px-8 py-5 text-right font-black text-slate-900 print:px-5">{formatCurrency(item.totalPrice)}</td>
+                                       <tr key={iIdx} className="font-medium text-slate-700 hover:bg-slate-50/50">
+                                          <td className="px-8 py-5 uppercase text-slate-900 font-bold">{item.description}</td>
+                                          <td className="px-6 py-5 text-center font-black">{item.quantity}</td>
+                                          <td className="px-8 py-5 text-right">{formatCurrency(item.unitPrice)}</td>
+                                          <td className="px-8 py-5 text-right text-red-500">-{formatCurrency(item.discountAmount || 0)}</td>
+                                          <td className="px-8 py-5 text-right text-green-600 font-black">{formatCurrency(item.taxAmount || 0)}</td>
+                                          <td className="px-8 py-5 text-right font-black text-slate-900">{formatCurrency(item.totalPrice)}</td>
                                        </tr>
                                     ))}
                                  </tbody>
-                                 <tfoot className="bg-slate-50 font-black text-slate-900">
-                                    <tr>
-                                       <td colSpan={3} className="px-8 py-5 text-right text-[10px] uppercase text-slate-400 tracking-widest">Akumulasi Dokumen</td>
-                                       <td className="px-6 py-5 text-right text-red-600">-{formatCurrency(doc.discountTotal || 0)}</td>
-                                       <td className="px-6 py-5 text-right text-green-600 bg-green-100/50">+{formatCurrency(doc.taxAmount)}</td>
-                                       <td className="px-8 py-5 text-right bg-slate-900 text-white">{formatCurrency(doc.totalAmount)}</td>
-                                    </tr>
-                                 </tfoot>
                               </table>
                            </div>
                         </div>
                       ))}
 
-                      {/* Area Analisis Auditor */}
-                      <div className="bg-slate-900 rounded-[48px] p-12 space-y-10 shadow-2xl relative overflow-hidden print:bg-white print:text-slate-900 print:border-2 print:border-slate-900 print:shadow-none print:p-8 print:rounded-[24px]">
-                        <div className="absolute top-0 right-0 p-12 opacity-5 text-white pointer-events-none print:hidden"><ShieldCheck size={180} /></div>
-                        <h4 className="text-white text-[14px] font-black uppercase tracking-[0.4em] border-b border-white/10 pb-6 flex items-center gap-5 print:text-slate-900 print:border-slate-200">
-                           <Activity size={24} /> Catatan Auditor Keuangan & Pajak
-                        </h4>
-                        <div className="space-y-6 relative z-10">
-                           {result.analysisFindings.map((f, fIdx) => (
-                              <div key={fIdx} className="flex gap-6 text-[14px] font-medium text-slate-300 items-start leading-relaxed print:text-slate-700">
-                                 <div className="w-2.5 h-2.5 rounded-full mt-2.5 flex-shrink-0 bg-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.6)] print:shadow-none" />
-                                 <span>{f}</span>
-                              </div>
-                           ))}
+                      <div className="bg-slate-900 rounded-[32px] p-10 space-y-8 shadow-2xl shadow-slate-900/30">
+                        <div className="flex items-center justify-between border-b border-white/10 pb-6">
+                           <h4 className="text-white text-sm font-black uppercase tracking-[0.2em] flex items-center gap-4">
+                             <ShieldCheck size={24} className="text-blue-500" /> Kesimpulan Auditor Digital
+                           </h4>
+                           <span className="text-[10px] font-black text-white/30 uppercase bg-white/5 px-4 py-1.5 rounded-full border border-white/5 tracking-widest">Verified by Gemini AI</span>
                         </div>
-                        
-                        {/* Area Tanda Tangan */}
-                        <div className="hidden print:grid grid-cols-2 gap-20 pt-16 mt-8">
-                           <div className="text-center">
-                              <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-20">Auditor Lapangan</p>
-                              <div className="border-b-2 border-slate-900 w-48 mx-auto"></div>
-                              <p className="text-xs font-bold mt-2 uppercase">DocuMatch AI Signature</p>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+                           <div className="space-y-4">
+                              {result.analysisFindings.map((f, fIdx) => (
+                                 <div key={fIdx} className="flex gap-5 text-sm text-slate-300 items-start">
+                                    <div className="w-2 h-2 rounded-full mt-1.5 bg-blue-500 flex-shrink-0 shadow-[0_0_8px_rgba(59,130,246,0.5)]" />
+                                    <span className="font-medium leading-relaxed">{f}</span>
+                                 </div>
+                              ))}
                            </div>
-                           <div className="text-center">
-                              <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-20">Manajer Keuangan</p>
-                              <div className="border-b-2 border-slate-900 w-48 mx-auto"></div>
-                              <p className="text-xs font-bold mt-2 uppercase">Verified by Global Solusi</p>
+                           <div className="bg-white/5 rounded-3xl p-8 border border-white/5 flex flex-col justify-center">
+                              <p className="text-[10px] font-black text-white/40 uppercase tracking-widest mb-4">Ringkasan Nilai Group</p>
+                              <div className="space-y-4">
+                                 <div className="flex justify-between items-end">
+                                    <span className="text-slate-400 text-xs font-bold uppercase">Total Pajak</span>
+                                    <span className="text-green-400 font-black text-xl tracking-tighter">{formatCurrency(result.documents.reduce((acc, d) => acc + (d.taxAmount || 0), 0))}</span>
+                                 </div>
+                                 <div className="flex justify-between items-end">
+                                    <span className="text-slate-400 text-xs font-bold uppercase">Total Nilai Bersih</span>
+                                    <span className="text-white font-black text-xl tracking-tighter">{formatCurrency(result.documents.reduce((acc, d) => acc + (d.totalAmount || 0), 0))}</span>
+                                 </div>
+                              </div>
                            </div>
                         </div>
                       </div>
@@ -441,117 +482,25 @@ const App: React.FC = () => {
                 </div>
               ))}
               
-              {reconResults.length === 0 && (
-                <div className="py-48 text-center bg-white rounded-[60px] border border-slate-100 shadow-inner no-print">
-                   <Split size={80} className="mx-auto text-slate-100 mb-10" />
-                   <h3 className="text-2xl font-black text-slate-900 uppercase tracking-tighter">Belum Ada Hasil Audit</h3>
-                   <p className="text-slate-400 font-bold uppercase tracking-widest mt-4">Unggah bundle dokumen faktur untuk memulai analisis pajak.</p>
-                </div>
-              )}
+              {/* Footer Kesimpulan Akhir untuk PDF */}
+              <div className="pt-20 pb-10 border-t border-slate-200 mt-20 text-center space-y-6">
+                 <h3 className="text-xl font-black text-slate-900 uppercase tracking-tighter">Lembar Verifikasi Akhir</h3>
+                 <p className="text-sm text-slate-500 max-w-2xl mx-auto font-medium">Laporan ini dihasilkan secara otomatis oleh sistem kecerdasan buatan DocuMatch AI untuk CV Global Solusi. Seluruh perhitungan pajak telah divalidasi berdasarkan data yang diekstraksi dari bundle dokumen fisik.</p>
+                 <div className="flex justify-center gap-20 pt-10">
+                    <div className="text-center">
+                       <div className="w-40 h-px bg-slate-200 mb-4" />
+                       <p className="text-[10px] font-black text-slate-400 uppercase">Petugas Audit</p>
+                    </div>
+                    <div className="text-center">
+                       <div className="w-40 h-px bg-slate-200 mb-4" />
+                       <p className="text-[10px] font-black text-slate-400 uppercase">Manager Keuangan</p>
+                    </div>
+                 </div>
+              </div>
             </div>
           )}
         </div>
       </main>
-
-      {/* Detail Modal */}
-      {selectedDoc && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 lg:p-12 no-print">
-          <div className="absolute inset-0 bg-slate-900/95 backdrop-blur-2xl animate-in fade-in duration-300" onClick={() => setSelectedDoc(null)}></div>
-          <div className="relative bg-white w-full max-w-5xl rounded-[56px] shadow-2xl overflow-hidden border-8 border-white transition-all transform animate-in zoom-in duration-300">
-            <div className={`p-10 lg:p-14 flex items-center justify-between ${selectedDoc.documentNumber.toUpperCase().startsWith('PO') ? 'bg-slate-900 text-white' : 'bg-blue-600 text-white'}`}>
-              <div className="flex items-center gap-8">
-                <div className="p-5 bg-white/20 rounded-[32px] backdrop-blur-md"><Receipt size={44} /></div>
-                <div>
-                  <h2 className="text-4xl font-black uppercase tracking-tighter leading-none mb-4">{selectedDoc.documentType}</h2>
-                  <div className="flex flex-wrap items-center gap-6 text-[10px] font-black opacity-60 tracking-[0.4em] uppercase">
-                    <p className="flex items-center gap-2"><Hash size={14} /> NO: #{selectedDoc.documentNumber}</p>
-                    <p className="flex items-center gap-2"><Stamp size={14} /> SERI: {selectedDoc.taxInvoiceNumber || 'NON-PKP'}</p>
-                  </div>
-                </div>
-              </div>
-              <button onClick={() => setSelectedDoc(null)} className="p-5 hover:bg-white/10 rounded-full text-white transition-all transform hover:rotate-90"><X size={40} /></button>
-            </div>
-
-            <div className="p-10 lg:p-16 space-y-12 overflow-y-auto max-h-[60vh]">
-               <div className="grid grid-cols-3 gap-10">
-                  <div className="space-y-4">
-                     <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em] border-b pb-4">Waktu Terbit</h4>
-                     <p className="text-[14px] font-bold text-slate-900">{selectedDoc.date}</p>
-                  </div>
-                  <div className="space-y-4">
-                     <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em] border-b pb-4">Nama Vendor</h4>
-                     <p className="text-[14px] font-bold text-slate-900 uppercase">{selectedDoc.vendorName}</p>
-                  </div>
-                  <div className="space-y-4 text-right">
-                     <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em] border-b pb-4">Total Pajak Rinci</h4>
-                     <p className="text-green-600 font-black text-3xl tracking-tighter">{formatCurrency(selectedDoc.taxAmount)}</p>
-                  </div>
-               </div>
-
-               <div className="bg-blue-50/50 p-6 rounded-[32px] border border-blue-100 flex items-center gap-4 text-blue-800">
-                  <Info className="flex-shrink-0" size={24} />
-                  <p className="text-xs font-bold uppercase tracking-tight leading-relaxed">Pajak di bawah ini dihitung per baris item (12% dari DPP setelah diskon) kemudian dijumlahkan untuk validasi total faktur.</p>
-               </div>
-
-               <div className="border-4 border-slate-50 rounded-[40px] overflow-hidden shadow-xl">
-                  <table className="w-full text-left">
-                     <thead className="bg-slate-900 text-white text-[11px] font-black uppercase tracking-widest">
-                        <tr>
-                           <th className="px-8 py-6">Nama Barang</th>
-                           <th className="px-6 py-6 text-center">Qty</th>
-                           <th className="px-6 py-6 text-right">Harga Satuan</th>
-                           <th className="px-6 py-6 text-right">Diskon</th>
-                           <th className="px-6 py-6 text-right text-green-400">PPN (12%)</th>
-                           <th className="px-8 py-6 text-right">Net</th>
-                        </tr>
-                     </thead>
-                     <tbody className="divide-y divide-slate-100 bg-white">
-                        {selectedDoc.items.map((item, i) => (
-                           <tr key={i} className="text-sm font-bold text-slate-700 hover:bg-slate-50">
-                              <td className="px-8 py-5 uppercase font-black text-slate-900 leading-tight">{item.description}</td>
-                              <td className="px-6 py-5 text-center">{item.quantity}</td>
-                              <td className="px-6 py-5 text-right">{formatCurrency(item.unitPrice)}</td>
-                              <td className="px-6 py-5 text-right text-red-500">-{formatCurrency(item.discountAmount || 0)}</td>
-                              <td className="px-6 py-5 text-right text-green-600 bg-green-50/20">{formatCurrency(item.taxAmount || 0)}</td>
-                              <td className="px-8 py-5 text-right font-black text-slate-900">{formatCurrency(item.totalPrice)}</td>
-                           </tr>
-                        ))}
-                     </tbody>
-                  </table>
-               </div>
-
-               <div className="flex justify-end">
-                  <div className="bg-slate-900 p-10 rounded-[40px] text-white w-96 space-y-4 shadow-2xl">
-                     <div className="flex justify-between items-center text-xs font-black uppercase text-slate-500">
-                        <span>Subtotal Bruto</span>
-                        <span>{formatCurrency(selectedDoc.subtotalAmount)}</span>
-                     </div>
-                     <div className="flex justify-between items-center text-xs font-black uppercase text-red-400">
-                        <span>Total Potongan Diskon</span>
-                        <span>-{formatCurrency(selectedDoc.discountTotal || 0)}</span>
-                     </div>
-                     <div className="flex justify-between items-center text-xs font-black uppercase text-green-400">
-                        <span>Total PPN (Sum of Items)</span>
-                        <span>+{formatCurrency(selectedDoc.taxAmount)}</span>
-                     </div>
-                     <div className="pt-4 border-t border-white/10 flex justify-between items-center">
-                        <div className="flex flex-col">
-                           <span className="text-[10px] font-black uppercase text-slate-400">Hasil Akhir Audit</span>
-                           <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest">GRAND TOTAL PAYABLE</span>
-                        </div>
-                        <span className="text-3xl font-black text-blue-400 tracking-tighter">{formatCurrency(selectedDoc.totalAmount)}</span>
-                     </div>
-                  </div>
-               </div>
-            </div>
-
-            <div className="p-10 bg-slate-50 border-t flex justify-end gap-6 no-print">
-               <button onClick={() => setSelectedDoc(null)} className="px-10 py-4 bg-white border-2 font-black rounded-2xl text-[10px] uppercase text-slate-500 border-slate-200 tracking-[0.2em]">Tutup Detail</button>
-               <button onClick={() => window.print()} className="px-10 py-4 bg-blue-600 text-white font-black rounded-2xl text-[10px] flex items-center gap-4 uppercase shadow-xl hover:bg-blue-700 transition-all active:scale-95"><Printer size={20} /> Cetak Bukti PDF</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

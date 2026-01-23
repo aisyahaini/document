@@ -9,6 +9,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <!-- Pustaka untuk download PDF otomatis -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     <style>
         body { font-family: 'Inter', sans-serif; }
         
@@ -30,7 +32,6 @@
                 width: 100% !important;
                 padding: 0 !important;
             }
-            /* Mencegah elemen terpotong antar halaman */
             .break-inside-avoid {
                 page-break-inside: avoid;
                 break-inside: avoid;
@@ -45,11 +46,16 @@
             thead {
                 display: table-header-group;
             }
-            /* Memaksa background muncul di PDF */
             * {
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
             }
+        }
+
+        /* Styling tambahan untuk hasil PDF agar tetap terlihat bagus */
+        .pdf-mode {
+            background: white !important;
+            color: black !important;
         }
     </style>
 <script type="importmap">
