@@ -5,7 +5,7 @@ import {
   X, Printer, Trash2, Package, Receipt, Activity, AlertCircle,
   FileSearch, FileCheck, Hash, Stamp, Files, Clock, ChevronDown, ChevronUp, Split,
   FileDown, TrendingUp, ShieldCheck, Info, ChevronRight, ListOrdered, Tag, 
-  Calculator, PieChart, BarChart3, ArrowUpRight
+  Calculator, PieChart, BarChart3, ArrowUpRight, AlertTriangle
 } from 'lucide-react';
 import { ProcessingFile, ExtractedData, ReconciliationResult } from './types';
 import { optimizeImage, processDocument, reconcileDocuments } from './services/geminiService';
@@ -118,13 +118,13 @@ const App: React.FC = () => {
     return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(amount);
   };
 
-  // Statistik Kesimpulan
   const allDocs = files.flatMap(f => f.extractedDocs || []);
   const stats = {
     totalDocs: allDocs.length,
     totalPPN: allDocs.reduce((acc, d) => acc + (d.taxAmount || 0), 0),
     totalDiscount: allDocs.reduce((acc, d) => acc + (d.discountTotal || 0), 0),
     totalGrand: allDocs.reduce((acc, d) => acc + (d.totalAmount || 0), 0),
+    alertsCount: reconResults.filter(r => !r.isMatch).length
   };
 
   const filteredDashboardDocs = allDocs.filter(doc => 
@@ -185,31 +185,38 @@ const App: React.FC = () => {
 
         <div id="printable-area" className="p-8 lg:p-12 max-w-6xl mx-auto space-y-10">
           
-          {/* Summary Section - KESIMPULAN UTAMA DI ATAS */}
+          {/* Summary Section */}
           {(view === 'dashboard' || view === 'reconciliation') && allDocs.length > 0 && (
             <div className="space-y-6 animate-in fade-in slide-in-from-top-4 duration-700">
                <div className="flex items-center justify-between mb-2">
                   <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest flex items-center gap-2">
                      <BarChart3 size={18} className="text-blue-600" /> Kesimpulan Ringkasan Audit
                   </h3>
-                  <span className="text-[10px] font-bold text-slate-400 bg-slate-100 px-3 py-1 rounded-full uppercase">Periode: {new Date().toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}</span>
+                  <div className="flex items-center gap-4">
+                    {stats.alertsCount > 0 && (
+                       <span className="bg-red-100 text-red-600 text-[10px] font-black px-3 py-1 rounded-full uppercase flex items-center gap-2 animate-pulse">
+                         <AlertTriangle size={12} /> {stats.alertsCount} Grup Bermasalah
+                       </span>
+                    )}
+                    <span className="text-[10px] font-bold text-slate-400 bg-slate-100 px-3 py-1 rounded-full uppercase">Update: {new Date().toLocaleTimeString('id-ID')}</span>
+                  </div>
                </div>
                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                  <div className="bg-white p-6 rounded-[32px] border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                  <div className="bg-white p-6 rounded-[32px] border border-slate-200 shadow-sm">
                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Total Dokumen</p>
-                     <p className="text-2xl font-black text-slate-900 flex items-center gap-2">{stats.totalDocs} <span className="text-xs text-slate-400 font-bold">Berkas</span></p>
+                     <p className="text-2xl font-black text-slate-900">{stats.totalDocs}</p>
                   </div>
-                  <div className="bg-white p-6 rounded-[32px] border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
-                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Total Diskon</p>
-                     <p className="text-2xl font-black text-red-600 tracking-tighter">-{formatCurrency(stats.totalDiscount)}</p>
-                  </div>
-                  <div className="bg-white p-6 rounded-[32px] border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                  <div className="bg-white p-6 rounded-[32px] border border-slate-200 shadow-sm">
                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Total PPN (12%)</p>
-                     <p className="text-2xl font-black text-green-600 tracking-tighter">{formatCurrency(stats.totalPPN)}</p>
+                     <p className="text-2xl font-black text-green-600">{formatCurrency(stats.totalPPN)}</p>
                   </div>
-                  <div className="bg-slate-900 p-6 rounded-[32px] shadow-xl shadow-slate-900/20 transform hover:-translate-y-1 transition-transform">
+                  <div className="bg-white p-6 rounded-[32px] border border-slate-200 shadow-sm">
+                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Total Diskon</p>
+                     <p className="text-2xl font-black text-red-600">-{formatCurrency(stats.totalDiscount)}</p>
+                  </div>
+                  <div className="bg-slate-900 p-6 rounded-[32px] shadow-xl">
                      <p className="text-[9px] font-black text-white/40 uppercase tracking-widest mb-1">Grand Total (Net)</p>
-                     <p className="text-2xl font-black text-white tracking-tighter">{formatCurrency(stats.totalGrand)}</p>
+                     <p className="text-2xl font-black text-white">{formatCurrency(stats.totalGrand)}</p>
                   </div>
                </div>
             </div>
@@ -221,11 +228,7 @@ const App: React.FC = () => {
                 <input type="file" multiple onChange={handleFileSelect} className="absolute inset-0 opacity-0 cursor-pointer" accept="image/*,.pdf" />
                 <div className="mx-auto w-24 h-24 bg-blue-50 rounded-[40px] flex items-center justify-center text-blue-600 mb-8 shadow-inner"><Upload size={40} /></div>
                 <h3 className="text-2xl font-black text-slate-900 uppercase tracking-tight">Input Bundle Faktur & Nota</h3>
-                <p className="text-slate-500 font-medium mt-3 max-w-sm mx-auto">Tarik & letakkan file atau klik untuk mengunggah bundle dokumen pajak (Faktur, PO, Surat Jalan).</p>
-                <div className="mt-8 flex justify-center gap-4">
-                   <span className="px-4 py-2 bg-slate-50 rounded-full text-[10px] font-black text-slate-400 uppercase border border-slate-100">Supports PDF & Images</span>
-                   <span className="px-4 py-2 bg-slate-50 rounded-full text-[10px] font-black text-slate-400 uppercase border border-slate-100">Multi-page Scanning</span>
-                </div>
+                <p className="text-slate-500 font-medium mt-3 max-w-sm mx-auto">Unggah bundle dokumen pajak (Faktur, PO, Surat Jalan) untuk audit otomatis.</p>
               </div>
 
               {files.length > 0 && (
@@ -233,15 +236,14 @@ const App: React.FC = () => {
                   <div className="px-12 py-10 border-b bg-slate-50/50 flex justify-between items-center">
                     <div>
                       <h2 className="font-black text-xl uppercase text-slate-800 flex items-center gap-4"><FileSearch size={24} className="text-blue-600" /> Antrean Bundle ({files.length} File)</h2>
-                      <p className="text-[11px] font-bold text-blue-600 uppercase mt-2 bg-blue-50 px-3 py-1 rounded-full w-fit">Status: {isProcessing ? 'Sedang Menganalisis...' : 'Siap Diproses'}</p>
                     </div>
                     <button 
                       onClick={processAllFiles} 
                       disabled={isProcessing} 
-                      className="bg-blue-600 text-white px-10 py-5 rounded-3xl text-sm font-black flex items-center gap-4 uppercase disabled:bg-slate-300 transition-all hover:scale-105 active:scale-95 shadow-xl shadow-blue-600/20"
+                      className="bg-blue-600 text-white px-10 py-5 rounded-3xl text-sm font-black flex items-center gap-4 uppercase disabled:bg-slate-300 transition-all hover:scale-105 shadow-xl shadow-blue-600/20"
                     >
                       {isProcessing ? <Loader2 className="animate-spin" size={20} /> : <CheckCircle2 size={20} />} 
-                      {isProcessing ? 'Processing Deep Scan...' : 'Jalankan Analisis Bundle'}
+                      {isProcessing ? 'Memproses...' : 'Jalankan Analisis'}
                     </button>
                   </div>
                   <div className="divide-y divide-slate-100">
@@ -261,14 +263,9 @@ const App: React.FC = () => {
                                   <Tag size={12} /> {f.extractedDocs.length} DOKUMEN TERDETEKSI
                                 </span>
                               )}
-                              {f.status === 'error' && (
-                                <span className="text-[10px] font-bold text-red-500 flex items-center gap-1">
-                                   <AlertCircle size={12} /> {f.errorMessage}
-                                </span>
-                              )}
                            </div>
                         </div>
-                        <button onClick={() => setFiles(prev => prev.filter(x => x.id !== f.id))} disabled={isProcessing} className="p-4 text-slate-300 hover:text-red-500 transition-colors"><Trash2 size={24} /></button>
+                        <button onClick={() => setFiles(prev => prev.filter(x => x.id !== f.id))} disabled={isProcessing} className="p-4 text-slate-300 hover:text-red-500"><Trash2 size={24} /></button>
                       </div>
                     ))}
                   </div>
@@ -278,28 +275,24 @@ const App: React.FC = () => {
           )}
 
           {view === 'dashboard' && (
-            <div className="bg-white rounded-[40px] border border-slate-200 shadow-xl overflow-hidden animate-in fade-in duration-500">
+            <div className="bg-white rounded-[40px] border border-slate-200 shadow-xl overflow-hidden">
               <div className="p-10 border-b bg-slate-50/50 flex justify-between items-center no-print">
                  <div className="relative">
                     <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                     <input 
                       type="text" 
-                      placeholder="Cari Nomor Faktur, NSFP, atau Nama Vendor..." 
-                      className="pl-14 pr-8 py-4 bg-white border border-slate-200 rounded-[24px] text-sm outline-none w-[400px] focus:ring-4 focus:ring-blue-500/10 transition-all font-medium"
+                      placeholder="Cari No Faktur, Vendor..." 
+                      className="pl-14 pr-8 py-4 bg-white border border-slate-200 rounded-[24px] text-sm outline-none w-[400px] focus:ring-4 focus:ring-blue-500/10 font-medium"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                     />
-                 </div>
-                 <div className="text-right">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Urut Berdasarkan</p>
-                    <p className="text-xs font-bold text-slate-900 uppercase">Input Terbaru</p>
                  </div>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-left">
                   <thead className="bg-slate-900 text-white text-[10px] font-black uppercase tracking-[0.2em]">
                     <tr>
-                      <th className="px-8 py-8 w-16 text-center no-print"></th>
+                      <th className="px-8 py-8 w-16 text-center"></th>
                       <th className="px-10 py-8">Identitas Dokumen</th>
                       <th className="px-10 py-8">Entitas Vendor</th>
                       <th className="px-10 py-8 text-right">PPN Masukan</th>
@@ -313,11 +306,11 @@ const App: React.FC = () => {
                         <React.Fragment key={idx}>
                           <tr onClick={() => toggleDashboardDoc(doc.documentNumber)} className="cursor-pointer hover:bg-slate-50 transition-all group">
                             <td className="px-8 py-8 text-center no-print">
-                               <ChevronRight size={20} className={`text-slate-300 transition-transform duration-300 ${isExpanded ? 'rotate-90 text-blue-600' : 'group-hover:text-slate-500'}`} />
+                               <ChevronRight size={20} className={`text-slate-300 transition-transform ${isExpanded ? 'rotate-90 text-blue-600' : ''}`} />
                             </td>
                             <td className="px-10 py-8">
                               <div className="font-black text-slate-900 text-base">#{doc.documentNumber}</div>
-                              <div className="text-[10px] font-black text-blue-600 uppercase tracking-tighter mt-1">NSFP: {doc.taxInvoiceNumber || 'NON-PKP / INTERNAL'}</div>
+                              <div className="text-[10px] font-black text-blue-600 uppercase mt-1">NSFP: {doc.taxInvoiceNumber || 'INTERNAL'}</div>
                             </td>
                             <td className="px-10 py-8 text-slate-800 font-bold uppercase text-xs">{doc.vendorName}</td>
                             <td className="px-10 py-8 text-right font-black text-green-600">{formatCurrency(doc.taxAmount || 0)}</td>
@@ -326,24 +319,24 @@ const App: React.FC = () => {
                           {isExpanded && (
                             <tr className="bg-slate-50/50">
                               <td colSpan={5} className="px-16 py-10">
-                                <div className="bg-white rounded-[24px] border border-slate-200 overflow-hidden shadow-lg animate-in slide-in-from-top-2 duration-300">
+                                <div className="bg-white rounded-[24px] border border-slate-200 overflow-hidden shadow-lg">
                                    <table className="w-full text-xs">
                                       <thead className="bg-slate-100/50 text-[10px] font-black uppercase text-slate-400">
                                          <tr>
-                                            <th className="px-8 py-4">Deskripsi Barang/Jasa</th>
+                                            <th className="px-8 py-4">Barang/Jasa</th>
                                             <th className="px-6 py-4 text-center">Qty</th>
-                                            <th className="px-8 py-4 text-right">Harga Satuan</th>
-                                            <th className="px-8 py-4 text-right text-red-500">Potongan</th>
-                                            <th className="px-8 py-4 text-right text-green-600">PPN (12%)</th>
-                                            <th className="px-8 py-4 text-right">Total Net</th>
+                                            <th className="px-8 py-4 text-right">Harga</th>
+                                            <th className="px-8 py-4 text-right text-red-500">Disc</th>
+                                            <th className="px-8 py-4 text-right text-green-600">PPN</th>
+                                            <th className="px-8 py-4 text-right">Total</th>
                                          </tr>
                                       </thead>
                                       <tbody className="divide-y divide-slate-50">
                                          {doc.items.map((item, i) => (
                                             <tr key={i} className="hover:bg-slate-50/30">
                                                <td className="px-8 py-4 font-bold text-slate-900 uppercase">{item.description}</td>
-                                               <td className="px-6 py-4 text-center font-medium">{item.quantity}</td>
-                                               <td className="px-8 py-4 text-right text-slate-600">{formatCurrency(item.unitPrice)}</td>
+                                               <td className="px-6 py-4 text-center">{item.quantity}</td>
+                                               <td className="px-8 py-4 text-right">{formatCurrency(item.unitPrice)}</td>
                                                <td className="px-8 py-4 text-right text-red-500">-{formatCurrency(item.discountAmount || 0)}</td>
                                                <td className="px-8 py-4 text-right text-green-600 font-black">{formatCurrency(item.taxAmount || 0)}</td>
                                                <td className="px-8 py-4 text-right font-black text-slate-900">{formatCurrency(item.totalPrice)}</td>
@@ -366,77 +359,106 @@ const App: React.FC = () => {
 
           {view === 'reconciliation' && (
             <div className="space-y-10 animate-in slide-in-from-bottom-6 duration-700">
-              <div className="no-print bg-blue-600 p-8 rounded-[40px] text-white flex items-center justify-between shadow-xl shadow-blue-600/20">
+              <div className="no-print bg-slate-900 p-8 rounded-[40px] text-white flex items-center justify-between shadow-xl">
                  <div className="flex items-center gap-6">
-                    <div className="bg-white/20 p-4 rounded-3xl"><Activity size={32} /></div>
+                    <div className="bg-blue-600 p-4 rounded-3xl shadow-lg shadow-blue-500/30"><Activity size={32} /></div>
                     <div>
-                       <h2 className="text-2xl font-black uppercase tracking-tighter">Hasil Rekonsiliasi Pajak</h2>
-                       <p className="text-blue-100 text-xs font-bold uppercase tracking-widest mt-1">Audit Grouping Berdasarkan Nomor Seri Faktur Pajak</p>
+                       <h2 className="text-2xl font-black uppercase tracking-tighter">Hasil Audit & Rekonsiliasi</h2>
+                       <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mt-1">Deep Analysis Grouping berdasarkan NSFP</p>
                     </div>
-                 </div>
-                 <div className="bg-white/10 px-6 py-4 rounded-[24px] text-right border border-white/10">
-                    <p className="text-[10px] font-black uppercase opacity-60">Status Verifikasi</p>
-                    <p className="text-lg font-black uppercase">Exhaustive Scan</p>
                  </div>
               </div>
 
               {reconResults.map((result, idx) => (
-                <div key={idx} className="bg-white rounded-[40px] border border-slate-200 shadow-xl overflow-hidden break-inside-avoid transform hover:shadow-2xl transition-shadow duration-500">
-                  <div onClick={() => toggleGroup(result.groupKey)} className={`p-10 border-b flex items-center justify-between cursor-pointer transition-colors ${result.taxNumberRef ? 'bg-blue-50/10' : 'bg-slate-50/30'}`}>
+                <div key={idx} className={`bg-white rounded-[40px] border-2 shadow-xl overflow-hidden break-inside-avoid ${result.isMatch ? 'border-slate-200' : 'border-red-500/30'}`}>
+                  <div 
+                    onClick={() => toggleGroup(result.groupKey)} 
+                    className={`p-10 border-b flex items-center justify-between cursor-pointer transition-colors ${!result.isMatch ? 'bg-red-50/50' : 'bg-slate-50/30'}`}
+                  >
                     <div className="flex items-center gap-10">
-                      <div className={`p-6 rounded-[24px] shadow-lg ${result.taxNumberRef ? 'bg-blue-600 text-white shadow-blue-500/20' : 'bg-slate-800 text-white'}`}>
-                        <Stamp size={36} />
+                      <div className={`p-6 rounded-[24px] shadow-lg ${result.isMatch ? 'bg-slate-800 text-white' : 'bg-red-600 text-white shadow-red-500/20 animate-pulse'}`}>
+                        {result.isMatch ? <Stamp size={36} /> : <AlertTriangle size={36} />}
                       </div>
                       <div>
-                        <h3 className="font-black text-2xl text-slate-900 uppercase tracking-tighter">
-                          {result.taxNumberRef ? `PKP: ${result.taxNumberRef}` : `NON-PKP: ${result.groupKey.split('-')[1]}`}
-                        </h3>
+                        <div className="flex items-center gap-4">
+                           <h3 className="font-black text-2xl text-slate-900 uppercase tracking-tighter">
+                             {result.taxNumberRef ? `PKP: ${result.taxNumberRef}` : `NON-PKP: ${result.groupKey}`}
+                           </h3>
+                           {!result.isMatch && (
+                             <span className="bg-red-600 text-white text-[10px] font-black px-4 py-1.5 rounded-full uppercase flex items-center gap-2">
+                               <AlertTriangle size={12} /> RED FLAG: KETIDAKSESUAIAN
+                             </span>
+                           )}
+                           {result.isMatch && result.documents.length > 1 && (
+                             <span className="bg-green-600 text-white text-[10px] font-black px-4 py-1.5 rounded-full uppercase flex items-center gap-2">
+                               <CheckCircle2 size={12} /> DATA SINKRON
+                             </span>
+                           )}
+                        </div>
                         <p className="text-[11px] font-black uppercase text-slate-400 mt-2 flex items-center gap-2">
                            <Clock size={12} /> Diverifikasi pada {result.checkedAt}
                         </p>
                       </div>
                     </div>
-                    <ChevronDown size={28} className={`text-slate-300 transition-transform duration-500 no-print ${expandedGroups[result.groupKey] ? 'rotate-180 text-blue-600' : ''}`} />
+                    <ChevronDown size={28} className={`text-slate-300 transition-transform no-print ${expandedGroups[result.groupKey] ? 'rotate-180' : ''}`} />
                   </div>
                   
-                  {(expandedGroups[result.groupKey] || true) && (
-                    <div className={`p-12 space-y-12 ${!expandedGroups[result.groupKey] ? 'hidden' : ''}`}>
+                  {expandedGroups[result.groupKey] && (
+                    <div className="p-12 space-y-12 animate-in fade-in slide-in-from-top-4 duration-500">
+                      
+                      {/* Alert Box for Discrepancies */}
+                      {!result.isMatch && result.discrepancies.length > 0 && (
+                        <div className="bg-red-50 border-2 border-red-200 rounded-[32px] p-8 space-y-4">
+                           <div className="flex items-center gap-3 text-red-600 font-black text-sm uppercase tracking-widest">
+                              <AlertCircle size={20} /> Rincian Temuan Audit (Anomaly Detected)
+                           </div>
+                           <div className="space-y-2">
+                              {result.discrepancies.map((msg, mIdx) => (
+                                 <div key={mIdx} className="flex gap-4 text-red-800 text-sm items-start bg-white/50 p-4 rounded-2xl border border-red-100">
+                                    <div className="w-2 h-2 rounded-full mt-1.5 bg-red-600 flex-shrink-0" />
+                                    <span className="font-bold uppercase tracking-tight">{msg}</span>
+                                 </div>
+                              ))}
+                           </div>
+                        </div>
+                      )}
+
                       {result.documents.map((doc, dIdx) => (
-                        <div key={dIdx} className="space-y-8 animate-in fade-in duration-500">
-                           <div className="p-8 bg-slate-50 rounded-[32px] border border-slate-100 flex items-center justify-between shadow-inner">
+                        <div key={dIdx} className="space-y-6">
+                           <div className={`p-8 rounded-[32px] border flex items-center justify-between ${!result.isMatch ? 'bg-red-50/20 border-red-100' : 'bg-slate-50 border-slate-100'}`}>
                               <div className="flex items-center gap-6">
-                                 <div className="bg-white p-3 rounded-2xl shadow-sm text-blue-600"><Files size={24} /></div>
+                                 <div className={`p-3 rounded-2xl shadow-sm ${!result.isMatch ? 'bg-red-100 text-red-600' : 'bg-white text-blue-600'}`}><Files size={24} /></div>
                                  <div>
                                     <h4 className="font-black text-slate-900 text-lg uppercase tracking-tight">{doc.vendorName}</h4>
-                                    <p className="text-[11px] font-black text-slate-400 uppercase tracking-widest mt-1">Inv: #{doc.documentNumber} | Tanggal: {doc.date}</p>
+                                    <p className="text-[11px] font-black text-slate-400 uppercase mt-1">#{doc.documentNumber} | Tanggal: {doc.date}</p>
                                  </div>
                               </div>
                               <div className="text-right">
-                                 <p className="text-[10px] font-black text-green-600 uppercase tracking-widest mb-1">Pajak Masukan (12%)</p>
-                                 <p className="text-2xl font-black text-green-600 tracking-tighter">{formatCurrency(doc.taxAmount)}</p>
+                                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Total Nilai</p>
+                                 <p className={`text-2xl font-black tracking-tighter ${!result.isMatch ? 'text-red-600' : 'text-slate-900'}`}>{formatCurrency(doc.totalAmount)}</p>
                               </div>
                            </div>
 
                            <div className="overflow-hidden border border-slate-200 rounded-[32px] shadow-sm bg-white">
                               <table className="w-full text-left text-xs">
-                                 <thead className="bg-slate-900 text-white font-black uppercase tracking-[0.1em]">
+                                 <thead className="bg-slate-900 text-white font-black uppercase">
                                     <tr>
-                                       <th className="px-8 py-5">Rincian Komoditas</th>
-                                       <th className="px-6 py-5 text-center">Volume</th>
+                                       <th className="px-8 py-5">Item Deskripsi</th>
+                                       <th className="px-6 py-5 text-center">Qty</th>
                                        <th className="px-8 py-5 text-right">Harga Satuan</th>
-                                       <th className="px-8 py-5 text-right text-red-400">Pot.</th>
-                                       <th className="px-8 py-5 text-right text-green-400">PPN</th>
+                                       <th className="px-8 py-5 text-right text-red-400">Diskon</th>
+                                       <th className="px-8 py-5 text-right">PPN (12%)</th>
                                        <th className="px-8 py-5 text-right">Total Net</th>
                                     </tr>
                                  </thead>
                                  <tbody className="divide-y divide-slate-100">
                                     {doc.items.map((item, iIdx) => (
-                                       <tr key={iIdx} className="font-medium text-slate-700 hover:bg-slate-50/50">
+                                       <tr key={iIdx} className="hover:bg-slate-50/50">
                                           <td className="px-8 py-5 uppercase text-slate-900 font-bold">{item.description}</td>
                                           <td className="px-6 py-5 text-center font-black">{item.quantity}</td>
                                           <td className="px-8 py-5 text-right">{formatCurrency(item.unitPrice)}</td>
-                                          <td className="px-8 py-5 text-right text-red-500">-{formatCurrency(item.discountAmount || 0)}</td>
-                                          <td className="px-8 py-5 text-right text-green-600 font-black">{formatCurrency(item.taxAmount || 0)}</td>
+                                          <td className="px-8 py-5 text-right text-red-600 font-bold">-{formatCurrency(item.discountAmount || 0)}</td>
+                                          <td className="px-8 py-5 text-right text-green-600 font-bold">{formatCurrency(item.taxAmount || 0)}</td>
                                           <td className="px-8 py-5 text-right font-black text-slate-900">{formatCurrency(item.totalPrice)}</td>
                                        </tr>
                                     ))}
@@ -446,46 +468,45 @@ const App: React.FC = () => {
                         </div>
                       ))}
 
-                      <div className="bg-slate-900 rounded-[32px] p-10 space-y-8 shadow-2xl shadow-slate-900/30">
+                      {/* Audit Summary Card */}
+                      <div className={`rounded-[32px] p-10 space-y-8 shadow-2xl ${result.isMatch ? 'bg-slate-900' : 'bg-red-900 shadow-red-900/20'}`}>
                         <div className="flex items-center justify-between border-b border-white/10 pb-6">
                            <h4 className="text-white text-sm font-black uppercase tracking-[0.2em] flex items-center gap-4">
-                             <ShieldCheck size={24} className="text-blue-500" /> Kesimpulan Auditor Digital
+                             <ShieldCheck size={24} className={result.isMatch ? 'text-blue-500' : 'text-white'} /> Kesimpulan Auditor
                            </h4>
-                           <span className="text-[10px] font-black text-white/30 uppercase bg-white/5 px-4 py-1.5 rounded-full border border-white/5 tracking-widest">Verified by Gemini AI</span>
+                           <span className="text-[10px] font-black text-white/30 uppercase tracking-widest">Verified by DocuMatch AI</span>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
                            <div className="space-y-4">
                               {result.analysisFindings.map((f, fIdx) => (
-                                 <div key={fIdx} className="flex gap-5 text-sm text-slate-300 items-start">
-                                    <div className="w-2 h-2 rounded-full mt-1.5 bg-blue-500 flex-shrink-0 shadow-[0_0_8px_rgba(59,130,246,0.5)]" />
+                                 <div key={fIdx} className="flex gap-5 text-sm text-slate-100 items-start">
+                                    <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${result.isMatch ? 'bg-blue-500' : 'bg-white'}`} />
                                     <span className="font-medium leading-relaxed">{f}</span>
                                  </div>
                               ))}
                            </div>
                            <div className="bg-white/5 rounded-3xl p-8 border border-white/5 flex flex-col justify-center">
-                              <p className="text-[10px] font-black text-white/40 uppercase tracking-widest mb-4">Ringkasan Nilai Group</p>
+                              <p className="text-[10px] font-black text-white/40 uppercase tracking-widest mb-4">Total Nilai Akumulasi</p>
                               <div className="space-y-4">
                                  <div className="flex justify-between items-end">
-                                    <span className="text-slate-400 text-xs font-bold uppercase">Total Pajak</span>
-                                    <span className="text-green-400 font-black text-xl tracking-tighter">{formatCurrency(result.documents.reduce((acc, d) => acc + (d.taxAmount || 0), 0))}</span>
-                                 </div>
-                                 <div className="flex justify-between items-end">
-                                    <span className="text-slate-400 text-xs font-bold uppercase">Total Nilai Bersih</span>
-                                    <span className="text-white font-black text-xl tracking-tighter">{formatCurrency(result.documents.reduce((acc, d) => acc + (d.totalAmount || 0), 0))}</span>
+                                    <span className="text-slate-400 text-xs font-bold uppercase">Nilai Bersih Terbesar</span>
+                                    <span className="text-white font-black text-2xl tracking-tighter">
+                                      {formatCurrency(Math.max(...result.documents.map(d => d.totalAmount)))}
+                                    </span>
                                  </div>
                               </div>
                            </div>
                         </div>
                       </div>
+
                     </div>
                   )}
                 </div>
               ))}
               
-              {/* Footer Kesimpulan Akhir untuk PDF */}
               <div className="pt-20 pb-10 border-t border-slate-200 mt-20 text-center space-y-6">
-                 <h3 className="text-xl font-black text-slate-900 uppercase tracking-tighter">Lembar Verifikasi Akhir</h3>
-                 <p className="text-sm text-slate-500 max-w-2xl mx-auto font-medium">Laporan ini dihasilkan secara otomatis oleh sistem kecerdasan buatan DocuMatch AI untuk CV Global Solusi. Seluruh perhitungan pajak telah divalidasi berdasarkan data yang diekstraksi dari bundle dokumen fisik.</p>
+                 <h3 className="text-xl font-black text-slate-900 uppercase tracking-tighter">Lembar Validasi Audit</h3>
+                 <p className="text-xs text-slate-500 max-w-2xl mx-auto font-medium">Laporan ini membandingkan data Faktur Pembelian, Penjualan, Surat Jalan, dan Faktur Pajak. Status 'Sesuai' menandakan sinkronisasi data 100% akurat.</p>
                  <div className="flex justify-center gap-20 pt-10">
                     <div className="text-center">
                        <div className="w-40 h-px bg-slate-200 mb-4" />
@@ -493,7 +514,7 @@ const App: React.FC = () => {
                     </div>
                     <div className="text-center">
                        <div className="w-40 h-px bg-slate-200 mb-4" />
-                       <p className="text-[10px] font-black text-slate-400 uppercase">Manager Keuangan</p>
+                       <p className="text-[10px] font-black text-slate-400 uppercase">Tanda Tangan Digital</p>
                     </div>
                  </div>
               </div>

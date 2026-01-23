@@ -2,9 +2,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { ExtractedData, DocumentType, ReconciliationResult } from "../types";
 
-// Dimensi 1400px cukup untuk OCR faktur dan menjaga ukuran file tetap aman di bawah limit API.
 const MAX_IMAGE_DIMENSION = 1400; 
-// Limit keras API Gemini adalah 50 MiB (52,428,800 bytes)
 const API_SIZE_LIMIT = 52428800;
 
 export const fileToBase64 = (file: File): Promise<string> => {
@@ -25,22 +23,15 @@ export const fileToBase64 = (file: File): Promise<string> => {
 };
 
 export async function optimizeImage(file: File): Promise<string> {
-  // Penanganan khusus PDF
   if (!file.type.startsWith('image/')) {
     const base64 = await fileToBase64(file);
-    // Hitung ukuran byte dari string base64 (approx: 3/4 length)
     const sizeInBytes = (base64.length * 3) / 4;
-    
     if (sizeInBytes > API_SIZE_LIMIT) {
-      throw new Error(
-        `File PDF "${file.name}" terlalu besar (${Math.round(sizeInBytes / 1024 / 1024)}MB). ` +
-        `API Gemini memiliki batas 50MB. Silakan pecah PDF menjadi beberapa bagian (misal per 10-20 halaman).`
-      );
+      throw new Error(`File PDF "${file.name}" terlalu besar. Maksimal 50MB.`);
     }
     return base64;
   }
 
-  // Penanganan Gambar (Resizing & Compression)
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.src = URL.createObjectURL(file);
@@ -69,16 +60,9 @@ export async function optimizeImage(file: File): Promise<string> {
         ctx.drawImage(img, 0, 0, width, height);
       }
       
-      // Menggunakan kualitas 0.65 untuk kompresi lebih agresif namun tetap tajam untuk OCR
       const dataUrl = canvas.toDataURL('image/jpeg', 0.65); 
       const base64 = dataUrl.split(',')[1];
-      
-      const sizeInBytes = (base64.length * 3) / 4;
-      if (sizeInBytes > API_SIZE_LIMIT) {
-        reject("Gambar tetap terlalu besar setelah dikompres. Gunakan resolusi lebih rendah.");
-      } else {
-        resolve(base64);
-      }
+      resolve(base64);
     };
     img.onerror = () => reject("Gagal mengoptimalkan gambar.");
   });
@@ -92,21 +76,12 @@ export async function processDocument(base64Data: string, mimeType: string): Pro
       model: 'gemini-3-flash-preview',
       contents: {
         parts: [
+          { inlineData: { data: base64Data, mimeType: mimeType } },
           {
-            inlineData: {
-              data: base64Data,
-              mimeType: mimeType
-            }
-          },
-          {
-            text: `Tugas Anda adalah Auditor Senior Pajak CV Global Solusi. 
-            ANALISIS DOKUMEN SECARA EXHAUSTIVE:
-            1. DOKUMEN BUNDLE: File ini mungkin berisi puluhan faktur/nota dalam satu file PDF/Gambar.
-            2. WAJIB SCAN SELURUHNYA: Jika ada 50 faktur, Anda harus mengembalikan 50 objek JSON. Jangan berhenti hanya di beberapa dokumen awal.
-            3. EKSTRAKSI DATA: Ambil NSFP (Nomor Seri Faktur Pajak), Nama Vendor, Tanggal, Item Barang, PPN 12%, dan Total.
-            4. VALIDASI: Pastikan Total Amount = Subtotal + Pajak - Diskon.
-            
-            KEMBALIKAN OUTPUT DALAM BENTUK ARRAY JSON LENGKAP.`
+            text: `Tugas: Auditor Senior Pajak CV Global Solusi. 
+            EKSTRAKSI DOKUMEN BUNDLE: Identifikasi SEMUA faktur/nota dalam file ini.
+            Setiap dokumen harus menjadi satu objek JSON. 
+            Ambil: Tipe Dokumen, No Dokumen, Tanggal, No Seri Faktur Pajak (NSFP), Nama Vendor, Nama Customer, Daftar Barang (Deskripsi, Qty, Harga, Diskon, Pajak), Subtotal, Total Pajak, Total Diskon, dan Grand Total.`
           }
         ]
       },
@@ -122,6 +97,7 @@ export async function processDocument(base64Data: string, mimeType: string): Pro
               date: { type: Type.STRING },
               taxInvoiceNumber: { type: Type.STRING },
               vendorName: { type: Type.STRING },
+              customerName: { type: Type.STRING },
               subtotalAmount: { type: Type.NUMBER },
               taxAmount: { type: Type.NUMBER },
               discountTotal: { type: Type.NUMBER },
@@ -141,7 +117,7 @@ export async function processDocument(base64Data: string, mimeType: string): Pro
                 }
               }
             },
-            required: ["documentNumber", "items", "totalAmount", "vendorName"]
+            required: ["documentNumber", "vendorName", "totalAmount"]
           }
         }
       }
@@ -149,12 +125,8 @@ export async function processDocument(base64Data: string, mimeType: string): Pro
 
     return JSON.parse(response.text) as ExtractedData[];
   } catch (error: any) {
-    console.error("Extraction error details:", error);
-    // Menangani error limit ukuran dari sisi API secara eksplisit
-    if (error.message?.includes("exceeds supported limit") || error.message?.includes("INVALID_ARGUMENT")) {
-      throw new Error("Payload file melebihi batas 50MB API Gemini. Silakan pecah dokumen Anda menjadi file yang lebih kecil.");
-    }
-    throw new Error("Gagal mengekstraksi data. Pastikan dokumen terbaca jelas atau file tidak terlalu besar.");
+    console.error("Extraction error:", error);
+    throw new Error("Gagal mengekstraksi data dari dokumen.");
   }
 }
 
@@ -169,21 +141,57 @@ export async function reconcileDocuments(documents: ExtractedData[]): Promise<Re
 
   return Object.entries(groups).map(([key, docs]) => {
     const isInternal = key.startsWith('INTERNAL-');
+    const discrepancies: string[] = [];
+    let isMatch = true;
+
+    // Logika Audit Silang (Cross-Validation)
+    if (docs.length > 1) {
+      const firstDoc = docs[0];
+      docs.forEach((doc, idx) => {
+        if (idx === 0) return;
+
+        // 1. Cek Selisih Total Nilai
+        if (Math.abs(doc.totalAmount - firstDoc.totalAmount) > 0.1) {
+          isMatch = false;
+          discrepancies.push(`Selisih Total: ${doc.documentNumber} (${doc.totalAmount.toLocaleString()}) vs ${firstDoc.documentNumber} (${firstDoc.totalAmount.toLocaleString()})`);
+        }
+
+        // 2. Cek Selisih Pajak (Jika keduanya ada nilai pajak)
+        if (Math.abs((doc.taxAmount || 0) - (firstDoc.taxAmount || 0)) > 0.1) {
+          isMatch = false;
+          discrepancies.push(`Selisih PPN: Terjadi perbedaan nilai pajak masukan antar dokumen.`);
+        }
+
+        // 3. Cek Inkonsistensi Nama Vendor
+        if (doc.vendorName.toLowerCase().replace(/\s/g, '') !== firstDoc.vendorName.toLowerCase().replace(/\s/g, '')) {
+          discrepancies.push(`Inkonsistensi Vendor: Nama vendor terdeteksi berbeda (${doc.vendorName} vs ${firstDoc.vendorName})`);
+        }
+      });
+    } else if (!isInternal && !docs[0].taxInvoiceNumber) {
+      // Jika dokumen diklaim sebagai faktur pajak tapi nomornya kosong
+      isMatch = false;
+      discrepancies.push("Peringatan: Dokumen pajak tidak memiliki Nomor Seri Faktur Pajak (NSFP).");
+    }
+
     const totalTax = docs.reduce((acc, d) => acc + (d.taxAmount || 0), 0);
     const totalNet = docs.reduce((acc, d) => acc + (d.totalAmount || 0), 0);
-    const totalDiscount = docs.reduce((acc, d) => acc + (d.discountTotal || 0), 0);
     
+    const analysisFindings = [
+      isInternal ? "Dokumen Non-PKP / Nota Internal." : `Faktur Pajak Terverifikasi: ${key}`,
+      `Status Audit: ${isMatch ? 'SESUAI (MATCH)' : '⚠️ ADA KETIDAKSESUAIAN'}`,
+      `Jumlah Dokumen Terkait: ${docs.length} Berkas`
+    ];
+
+    if (isMatch && docs.length > 1) {
+      analysisFindings.push("Validasi Silang: Seluruh nilai numerik (Total, PPN, Diskon) sinkron antar dokumen.");
+    }
+
     return {
       groupKey: key,
       documents: docs,
-      isMatch: true,
-      discrepancies: [],
-      analysisFindings: [
-        isInternal ? "Faktur Non-PKP atau Nota Internal." : `Faktur Pajak Terverifikasi: ${key}`,
-        `Akumulasi PPN Masukan: Rp ${totalTax.toLocaleString('id-ID')}`,
-        `Total Penghematan (Diskon): Rp ${totalDiscount.toLocaleString('id-ID')}`,
-        `Total Nilai Transaksi: Rp ${totalNet.toLocaleString('id-ID')}`
-      ],
+      isMatch,
+      discrepancies,
+      analysisFindings,
       checkedAt: new Date().toLocaleString('id-ID'),
       taxNumberRef: isInternal ? undefined : key
     };
