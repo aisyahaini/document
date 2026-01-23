@@ -4,6 +4,8 @@ import { ExtractedData, DocumentType, ReconciliationResult } from "../types";
 
 const MAX_IMAGE_DIMENSION = 1400; 
 const API_SIZE_LIMIT = 52428800;
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 2000;
 
 export const fileToBase64 = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -21,6 +23,10 @@ export const fileToBase64 = (file: File): Promise<string> => {
     reader.onerror = error => reject(error);
   });
 };
+
+async function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 export async function optimizeImage(file: File): Promise<string> {
   if (!file.type.startsWith('image/')) {
@@ -70,64 +76,77 @@ export async function optimizeImage(file: File): Promise<string> {
 
 export async function processDocument(base64Data: string, mimeType: string): Promise<ExtractedData[]> {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: {
-        parts: [
-          { inlineData: { data: base64Data, mimeType: mimeType } },
-          {
-            text: `Tugas: Auditor Senior Pajak CV Global Solusi. 
-            EKSTRAKSI DOKUMEN BUNDLE: Identifikasi SEMUA faktur/nota dalam file ini.
-            Setiap dokumen harus menjadi satu objek JSON. 
-            Ambil: Tipe Dokumen, No Dokumen, Tanggal, No Seri Faktur Pajak (NSFP), Nama Vendor, Nama Customer, Daftar Barang (Deskripsi, Qty, Harga, Diskon, Pajak), Subtotal, Total Pajak, Total Diskon, dan Grand Total.`
-          }
-        ]
-      },
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              documentType: { type: Type.STRING },
-              documentNumber: { type: Type.STRING },
-              date: { type: Type.STRING },
-              taxInvoiceNumber: { type: Type.STRING },
-              vendorName: { type: Type.STRING },
-              customerName: { type: Type.STRING },
-              subtotalAmount: { type: Type.NUMBER },
-              taxAmount: { type: Type.NUMBER },
-              discountTotal: { type: Type.NUMBER },
-              totalAmount: { type: Type.NUMBER },
-              items: {
-                type: Type.ARRAY,
+  let lastError: any;
+
+  for (let i = 0; i < MAX_RETRIES; i++) {
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: {
+          parts: [
+            { inlineData: { data: base64Data, mimeType: mimeType } },
+            {
+              text: `Tugas: Auditor Senior Pajak CV Global Solusi. 
+              EKSTRAKSI DOKUMEN BUNDLE: Identifikasi SEMUA faktur/nota dalam file ini.
+              Setiap dokumen harus menjadi satu objek JSON. 
+              Ambil: Tipe Dokumen, No Dokumen, Tanggal, No Seri Faktur Pajak (NSFP), Nama Vendor, Nama Customer, Daftar Barang (Deskripsi, Qty, Harga, Diskon, Pajak), Subtotal, Total Pajak, Total Diskon, dan Grand Total.`
+            }
+          ]
+        },
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                documentType: { type: Type.STRING },
+                documentNumber: { type: Type.STRING },
+                date: { type: Type.STRING },
+                taxInvoiceNumber: { type: Type.STRING },
+                vendorName: { type: Type.STRING },
+                customerName: { type: Type.STRING },
+                subtotalAmount: { type: Type.NUMBER },
+                taxAmount: { type: Type.NUMBER },
+                discountTotal: { type: Type.NUMBER },
+                totalAmount: { type: Type.NUMBER },
                 items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    description: { type: Type.STRING },
-                    quantity: { type: Type.NUMBER },
-                    unitPrice: { type: Type.NUMBER },
-                    discountAmount: { type: Type.NUMBER },
-                    taxAmount: { type: Type.NUMBER },
-                    totalPrice: { type: Type.NUMBER }
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      description: { type: Type.STRING },
+                      quantity: { type: Type.NUMBER },
+                      unitPrice: { type: Type.NUMBER },
+                      discountAmount: { type: Type.NUMBER },
+                      taxAmount: { type: Type.NUMBER },
+                      totalPrice: { type: Type.NUMBER }
+                    }
                   }
                 }
-              }
-            },
-            required: ["documentNumber", "vendorName", "totalAmount"]
+              },
+              required: ["documentNumber", "vendorName", "totalAmount"]
+            }
           }
         }
-      }
-    });
+      });
 
-    return JSON.parse(response.text) as ExtractedData[];
-  } catch (error: any) {
-    console.error("Extraction error:", error);
-    throw new Error("Gagal mengekstraksi data dari dokumen.");
+      if (!response.text) {
+        throw new Error("Respons AI kosong.");
+      }
+
+      return JSON.parse(response.text) as ExtractedData[];
+    } catch (error: any) {
+      lastError = error;
+      console.warn(`Attempt ${i + 1} failed:`, error.message);
+      if (i < MAX_RETRIES - 1) {
+        await sleep(RETRY_DELAY * Math.pow(2, i)); // Exponential backoff
+      }
+    }
   }
+
+  console.error("All extraction attempts failed:", lastError);
+  throw new Error(lastError?.message || "Gagal mengekstraksi data dari dokumen setelah beberapa percobaan.");
 }
 
 export async function reconcileDocuments(documents: ExtractedData[]): Promise<ReconciliationResult[]> {
@@ -144,38 +163,30 @@ export async function reconcileDocuments(documents: ExtractedData[]): Promise<Re
     const discrepancies: string[] = [];
     let isMatch = true;
 
-    // Logika Audit Silang (Cross-Validation)
     if (docs.length > 1) {
       const firstDoc = docs[0];
       docs.forEach((doc, idx) => {
         if (idx === 0) return;
 
-        // 1. Cek Selisih Total Nilai
         if (Math.abs(doc.totalAmount - firstDoc.totalAmount) > 0.1) {
           isMatch = false;
           discrepancies.push(`Selisih Total: ${doc.documentNumber} (${doc.totalAmount.toLocaleString()}) vs ${firstDoc.documentNumber} (${firstDoc.totalAmount.toLocaleString()})`);
         }
 
-        // 2. Cek Selisih Pajak (Jika keduanya ada nilai pajak)
         if (Math.abs((doc.taxAmount || 0) - (firstDoc.taxAmount || 0)) > 0.1) {
           isMatch = false;
           discrepancies.push(`Selisih PPN: Terjadi perbedaan nilai pajak masukan antar dokumen.`);
         }
 
-        // 3. Cek Inkonsistensi Nama Vendor
         if (doc.vendorName.toLowerCase().replace(/\s/g, '') !== firstDoc.vendorName.toLowerCase().replace(/\s/g, '')) {
           discrepancies.push(`Inkonsistensi Vendor: Nama vendor terdeteksi berbeda (${doc.vendorName} vs ${firstDoc.vendorName})`);
         }
       });
     } else if (!isInternal && !docs[0].taxInvoiceNumber) {
-      // Jika dokumen diklaim sebagai faktur pajak tapi nomornya kosong
       isMatch = false;
       discrepancies.push("Peringatan: Dokumen pajak tidak memiliki Nomor Seri Faktur Pajak (NSFP).");
     }
 
-    const totalTax = docs.reduce((acc, d) => acc + (d.taxAmount || 0), 0);
-    const totalNet = docs.reduce((acc, d) => acc + (d.totalAmount || 0), 0);
-    
     const analysisFindings = [
       isInternal ? "Dokumen Non-PKP / Nota Internal." : `Faktur Pajak Terverifikasi: ${key}`,
       `Status Audit: ${isMatch ? 'SESUAI (MATCH)' : '⚠️ ADA KETIDAKSESUAIAN'}`,

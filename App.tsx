@@ -15,13 +15,23 @@ const STORAGE_KEY_RECON = 'documatch_recon';
 
 const App: React.FC = () => {
   const [files, setFiles] = useState<ProcessingFile[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_FILES);
-    return saved ? JSON.parse(saved) : [];
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_FILES);
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      console.error("Failed to parse files from storage", e);
+      return [];
+    }
   });
   
   const [reconResults, setReconResults] = useState<ReconciliationResult[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_RECON);
-    return saved ? JSON.parse(saved) : [];
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_RECON);
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      console.error("Failed to parse reconciliation results from storage", e);
+      return [];
+    }
   });
 
   const [isProcessing, setIsProcessing] = useState(false);
@@ -76,6 +86,11 @@ const App: React.FC = () => {
         updatedFiles[i].status = 'processing';
         setFiles([...updatedFiles]);
         const fileObj = (updatedFiles[i] as any).file;
+        if (!fileObj) {
+           updatedFiles[i].status = 'error';
+           updatedFiles[i].errorMessage = "Data file tidak ditemukan. Mohon unggah ulang.";
+           continue;
+        }
         const base64 = await optimizeImage(fileObj);
         const docs = await processDocument(base64, fileObj.type);
         updatedFiles[i].extractedDocs = docs;
@@ -115,7 +130,7 @@ const App: React.FC = () => {
   };
 
   const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(amount);
+    return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(amount || 0);
   };
 
   const allDocs = files.flatMap(f => f.extractedDocs || []);
@@ -128,9 +143,9 @@ const App: React.FC = () => {
   };
 
   const filteredDashboardDocs = allDocs.filter(doc => 
-    doc.documentNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (doc.documentNumber || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
     (doc.taxInvoiceNumber || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
-    doc.vendorName.toLowerCase().includes(searchQuery.toLowerCase())
+    (doc.vendorName || "").toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   return (
@@ -300,7 +315,7 @@ const App: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {filteredDashboardDocs.map((doc, idx) => {
+                    {(filteredDashboardDocs || []).map((doc, idx) => {
                       const isExpanded = expandedDashboardDocs[doc.documentNumber];
                       return (
                         <React.Fragment key={idx}>
@@ -319,30 +334,53 @@ const App: React.FC = () => {
                           {isExpanded && (
                             <tr className="bg-slate-50/50">
                               <td colSpan={5} className="px-16 py-10">
-                                <div className="bg-white rounded-[24px] border border-slate-200 overflow-hidden shadow-lg">
+                                <div className="bg-white rounded-[24px] border-2 border-slate-200 overflow-hidden shadow-2xl animate-in fade-in duration-300">
+                                   <div className="bg-slate-900 px-8 py-4 border-b flex items-center justify-between">
+                                      <span className="text-[10px] font-black text-white uppercase tracking-[0.2em] flex items-center gap-2">
+                                         <Calculator size={14} className="text-blue-400" /> Rincian Akurasi Pajak & Diskon Per Item
+                                      </span>
+                                   </div>
                                    <table className="w-full text-xs">
-                                      <thead className="bg-slate-100/50 text-[10px] font-black uppercase text-slate-400">
+                                      <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-500 border-b">
                                          <tr>
-                                            <th className="px-8 py-4">Barang/Jasa</th>
-                                            <th className="px-6 py-4 text-center">Qty</th>
-                                            <th className="px-8 py-4 text-right">Harga</th>
-                                            <th className="px-8 py-4 text-right text-red-500">Disc</th>
-                                            <th className="px-8 py-4 text-right text-green-600">PPN</th>
-                                            <th className="px-8 py-4 text-right">Total</th>
+                                            <th className="px-8 py-5">Barang/Jasa</th>
+                                            <th className="px-4 py-5 text-center">Qty</th>
+                                            <th className="px-6 py-5 text-right">Harga Satuan</th>
+                                            <th className="px-8 py-5 text-right bg-slate-50/50">Gross (QxP)</th>
+                                            <th className="px-8 py-5 text-right bg-red-50 text-red-600 border-x border-red-100">Diskon (Nominal)</th>
+                                            <th className="px-8 py-5 text-right bg-green-50 text-green-700 border-x border-green-100">PPN (12%)</th>
+                                            <th className="px-8 py-5 text-right font-bold">Nett Total</th>
                                          </tr>
                                       </thead>
-                                      <tbody className="divide-y divide-slate-50">
-                                         {doc.items.map((item, i) => (
-                                            <tr key={i} className="hover:bg-slate-50/30">
-                                               <td className="px-8 py-4 font-bold text-slate-900 uppercase">{item.description}</td>
-                                               <td className="px-6 py-4 text-center">{item.quantity}</td>
-                                               <td className="px-8 py-4 text-right">{formatCurrency(item.unitPrice)}</td>
-                                               <td className="px-8 py-4 text-right text-red-500">-{formatCurrency(item.discountAmount || 0)}</td>
-                                               <td className="px-8 py-4 text-right text-green-600 font-black">{formatCurrency(item.taxAmount || 0)}</td>
-                                               <td className="px-8 py-4 text-right font-black text-slate-900">{formatCurrency(item.totalPrice)}</td>
+                                      <tbody className="divide-y divide-slate-100">
+                                         {(doc.items || []).map((item, i) => (
+                                            <tr key={i} className="hover:bg-slate-50/30 transition-colors">
+                                               <td className="px-8 py-5 font-bold text-slate-900 uppercase">{item.description}</td>
+                                               <td className="px-4 py-5 text-center font-black text-slate-600">{item.quantity}</td>
+                                               <td className="px-6 py-5 text-right text-slate-500">{formatCurrency(item.unitPrice)}</td>
+                                               <td className="px-8 py-5 text-right font-bold text-slate-700 bg-slate-50/30">{formatCurrency(item.quantity * item.unitPrice)}</td>
+                                               <td className="px-8 py-5 text-right bg-red-50/30 border-x border-red-50">
+                                                  <div className="flex flex-col items-end">
+                                                     <span className="text-red-600 font-black">-{formatCurrency(item.discountAmount || 0)}</span>
+                                                     {item.discountPercentage && <span className="text-[9px] bg-red-600 text-white px-1.5 py-0.5 rounded uppercase font-black mt-1">{item.discountPercentage}% OFF</span>}
+                                                  </div>
+                                               </td>
+                                               <td className="px-8 py-5 text-right bg-green-50/30 border-x border-green-50">
+                                                  <div className="flex flex-col items-end">
+                                                     <span className="text-green-700 font-black">{formatCurrency(item.taxAmount || 0)}</span>
+                                                     <span className="text-[8px] text-green-600/60 uppercase font-black tracking-widest mt-0.5">VAT IN (12%)</span>
+                                                  </div>
+                                               </td>
+                                               <td className="px-8 py-5 text-right font-black text-slate-900 text-sm">{formatCurrency(item.totalPrice)}</td>
                                             </tr>
                                          ))}
                                       </tbody>
+                                      <tfoot className="bg-slate-900 text-white">
+                                         <tr>
+                                            <td colSpan={6} className="px-8 py-5 text-right font-black uppercase text-[10px] tracking-widest border-r border-white/10">Total Akumulasi Dokumen (Nett)</td>
+                                            <td className="px-8 py-5 text-right font-black text-base bg-blue-600">{formatCurrency(doc.totalAmount)}</td>
+                                         </tr>
+                                      </tfoot>
                                    </table>
                                 </div>
                               </td>
@@ -369,7 +407,7 @@ const App: React.FC = () => {
                  </div>
               </div>
 
-              {reconResults.map((result, idx) => (
+              {(reconResults || []).map((result, idx) => (
                 <div key={idx} className={`bg-white rounded-[40px] border-2 shadow-xl overflow-hidden break-inside-avoid ${result.isMatch ? 'border-slate-200' : 'border-red-500/30'}`}>
                   <div 
                     onClick={() => toggleGroup(result.groupKey)} 
@@ -389,7 +427,7 @@ const App: React.FC = () => {
                                <AlertTriangle size={12} /> RED FLAG: KETIDAKSESUAIAN
                              </span>
                            )}
-                           {result.isMatch && result.documents.length > 1 && (
+                           {result.isMatch && (result.documents || []).length > 1 && (
                              <span className="bg-green-600 text-white text-[10px] font-black px-4 py-1.5 rounded-full uppercase flex items-center gap-2">
                                <CheckCircle2 size={12} /> DATA SINKRON
                              </span>
@@ -406,14 +444,13 @@ const App: React.FC = () => {
                   {expandedGroups[result.groupKey] && (
                     <div className="p-12 space-y-12 animate-in fade-in slide-in-from-top-4 duration-500">
                       
-                      {/* Alert Box for Discrepancies */}
-                      {!result.isMatch && result.discrepancies.length > 0 && (
+                      {!result.isMatch && (result.discrepancies || []).length > 0 && (
                         <div className="bg-red-50 border-2 border-red-200 rounded-[32px] p-8 space-y-4">
                            <div className="flex items-center gap-3 text-red-600 font-black text-sm uppercase tracking-widest">
                               <AlertCircle size={20} /> Rincian Temuan Audit (Anomaly Detected)
                            </div>
                            <div className="space-y-2">
-                              {result.discrepancies.map((msg, mIdx) => (
+                              {(result.discrepancies || []).map((msg, mIdx) => (
                                  <div key={mIdx} className="flex gap-4 text-red-800 text-sm items-start bg-white/50 p-4 rounded-2xl border border-red-100">
                                     <div className="w-2 h-2 rounded-full mt-1.5 bg-red-600 flex-shrink-0" />
                                     <span className="font-bold uppercase tracking-tight">{msg}</span>
@@ -423,7 +460,7 @@ const App: React.FC = () => {
                         </div>
                       )}
 
-                      {result.documents.map((doc, dIdx) => (
+                      {(result.documents || []).map((doc, dIdx) => (
                         <div key={dIdx} className="space-y-6">
                            <div className={`p-8 rounded-[32px] border flex items-center justify-between ${!result.isMatch ? 'bg-red-50/20 border-red-100' : 'bg-slate-50 border-slate-100'}`}>
                               <div className="flex items-center gap-6">
@@ -439,36 +476,57 @@ const App: React.FC = () => {
                               </div>
                            </div>
 
-                           <div className="overflow-hidden border border-slate-200 rounded-[32px] shadow-sm bg-white">
+                           <div className="overflow-hidden border-2 border-slate-100 rounded-[32px] shadow-sm bg-white">
+                              <div className="bg-slate-50 px-8 py-4 border-b flex items-center justify-between">
+                                 <span className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] flex items-center gap-2">
+                                    <ListOrdered size={14} /> Detil Komponen Harga per Item (Audit Lanjutan)
+                                 </span>
+                              </div>
                               <table className="w-full text-left text-xs">
                                  <thead className="bg-slate-900 text-white font-black uppercase">
                                     <tr>
-                                       <th className="px-8 py-5">Item Deskripsi</th>
-                                       <th className="px-6 py-5 text-center">Qty</th>
-                                       <th className="px-8 py-5 text-right">Harga Satuan</th>
-                                       <th className="px-8 py-5 text-right text-red-400">Diskon</th>
-                                       <th className="px-8 py-5 text-right">PPN (12%)</th>
-                                       <th className="px-8 py-5 text-right">Total Net</th>
+                                       <th className="px-8 py-5">Deskripsi Item</th>
+                                       <th className="px-4 py-5 text-center">Qty</th>
+                                       <th className="px-6 py-5 text-right">Unit Price</th>
+                                       <th className="px-6 py-5 text-right bg-white/5">Gross</th>
+                                       <th className="px-8 py-5 text-right text-red-400 bg-red-900/10">Diskon (-)</th>
+                                       <th className="px-8 py-5 text-right text-green-400 bg-green-900/10">PPN 12% (+)</th>
+                                       <th className="px-8 py-5 text-right">Subtotal Nett</th>
                                     </tr>
                                  </thead>
                                  <tbody className="divide-y divide-slate-100">
-                                    {doc.items.map((item, iIdx) => (
-                                       <tr key={iIdx} className="hover:bg-slate-50/50">
-                                          <td className="px-8 py-5 uppercase text-slate-900 font-bold">{item.description}</td>
-                                          <td className="px-6 py-5 text-center font-black">{item.quantity}</td>
-                                          <td className="px-8 py-5 text-right">{formatCurrency(item.unitPrice)}</td>
-                                          <td className="px-8 py-5 text-right text-red-600 font-bold">-{formatCurrency(item.discountAmount || 0)}</td>
-                                          <td className="px-8 py-5 text-right text-green-600 font-bold">{formatCurrency(item.taxAmount || 0)}</td>
-                                          <td className="px-8 py-5 text-right font-black text-slate-900">{formatCurrency(item.totalPrice)}</td>
+                                    {(doc.items || []).map((item, iIdx) => (
+                                       <tr key={iIdx} className="hover:bg-slate-50 transition-colors">
+                                          <td className="px-8 py-5 uppercase text-slate-900 font-bold max-w-xs">{item.description}</td>
+                                          <td className="px-4 py-5 text-center font-black">{item.quantity}</td>
+                                          <td className="px-6 py-5 text-right text-slate-500">{formatCurrency(item.unitPrice)}</td>
+                                          <td className="px-6 py-5 text-right font-bold text-slate-700 bg-slate-50/30">{formatCurrency(item.quantity * item.unitPrice)}</td>
+                                          <td className="px-8 py-5 text-right bg-red-50 text-red-700 font-black">
+                                             <div className="flex flex-col items-end">
+                                                <span>-{formatCurrency(item.discountAmount || 0)}</span>
+                                             </div>
+                                          </td>
+                                          <td className="px-8 py-5 text-right bg-green-50 text-green-700 font-black">
+                                             <div className="flex flex-col items-end">
+                                                <span>{formatCurrency(item.taxAmount || 0)}</span>
+                                                <span className="text-[8px] opacity-60">PAJAK MASUKAN</span>
+                                             </div>
+                                          </td>
+                                          <td className="px-8 py-5 text-right font-black text-slate-900 text-sm">{formatCurrency(item.totalPrice)}</td>
                                        </tr>
                                     ))}
                                  </tbody>
+                                 <tfoot className="bg-slate-50 border-t">
+                                    <tr>
+                                       <td colSpan={6} className="px-8 py-4 text-right font-black uppercase text-[10px] tracking-widest text-slate-400">Total Akumulasi Dokumen Ini</td>
+                                       <td className="px-8 py-4 text-right font-black text-slate-900 border-l border-slate-100 text-base">{formatCurrency(doc.totalAmount)}</td>
+                                    </tr>
+                                 </tfoot>
                               </table>
                            </div>
                         </div>
                       ))}
 
-                      {/* Audit Summary Card */}
                       <div className={`rounded-[32px] p-10 space-y-8 shadow-2xl ${result.isMatch ? 'bg-slate-900' : 'bg-red-900 shadow-red-900/20'}`}>
                         <div className="flex items-center justify-between border-b border-white/10 pb-6">
                            <h4 className="text-white text-sm font-black uppercase tracking-[0.2em] flex items-center gap-4">
@@ -478,7 +536,7 @@ const App: React.FC = () => {
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
                            <div className="space-y-4">
-                              {result.analysisFindings.map((f, fIdx) => (
+                              {(result.analysisFindings || []).map((f, fIdx) => (
                                  <div key={fIdx} className="flex gap-5 text-sm text-slate-100 items-start">
                                     <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${result.isMatch ? 'bg-blue-500' : 'bg-white'}`} />
                                     <span className="font-medium leading-relaxed">{f}</span>
@@ -491,7 +549,7 @@ const App: React.FC = () => {
                                  <div className="flex justify-between items-end">
                                     <span className="text-slate-400 text-xs font-bold uppercase">Nilai Bersih Terbesar</span>
                                     <span className="text-white font-black text-2xl tracking-tighter">
-                                      {formatCurrency(Math.max(...result.documents.map(d => d.totalAmount)))}
+                                      {formatCurrency(Math.max(...(result.documents || []).map(d => d.totalAmount || 0), 0))}
                                     </span>
                                  </div>
                               </div>
